@@ -1,5 +1,4 @@
-#urlopen = f"https://api.observablehq.com/${name}
-import json
+import sys, json, requests
 
 class Cell:
 
@@ -12,8 +11,12 @@ class Cell:
         self.key = 0
 
     @property
+    def isEmpty( self ):
+        return len(self.value) == 0
+
+    @property
     def text( self ):
-        return f"// {self.inputs}\nconst {self.name} = " + "".join(self.value)
+        return f"// {self.inputs}\nexport const {self.name} = " + "".join(self.value)
 
 class NotebookParser:
     """A crude line-based cell extractor for Observable. This relies on the
@@ -23,12 +26,12 @@ class NotebookParser:
     NAME   = "      name: "
     INPUTS = "      inputs: "
     VALUE  = "      value: "
-    END = ")})"
+    END    = ")})"
 
     def __init__( self ):
-        self.hasValue = False
+        self.feedLineToCell = False
         self.cells    = []
-        self.cell = None
+        self.cell     = None
 
     def feed( self, line ):
         if line.startswith(self.NAME):
@@ -41,14 +44,20 @@ class NotebookParser:
             else:
                 self.cells[-1].inputs = inputs
         elif line.startswith(self.VALUE):
-            self.hasValue = True
+            # We only
+            self.feedLineToCell = self.cells and self.cells[-1].isEmpty and True
         elif line.startswith(self.END):
-            self.hasValue = False
-        elif self.hasValue:
+            self.feedLineToCell = False
+        elif self.feedLineToCell:
             if not self.cells:
                 pass
             else:
                 self.cells[-1].value.append(line)
+
+    def post( self ):
+        # has_md_only = lambda _:len(_.inputs) == 1 and _.inputs[0] == "md"
+        # self.cells = sorted(prioritize([_ for _ in self.cells if not has_md_only(_)]), key=lambda _:_.key)
+        return self.cells
 
 def prioritize(cells):
     """Brute force prioritization of cells based on dependencies. This would
@@ -68,10 +77,14 @@ def prioritize(cells):
         cell.key = len(cells) * cell.order + cell.index
     return cells
 
-parser = NotebookParser()
-with open("boilerplate.js") as f:
-    for line in f.readlines():
-        parser.feed(line)
-for cell in sorted(prioritize(parser.cells), key=lambda _:_.order * 1000 + _.index):
-    print (cell.text)
+def download(notebook):
+    url = f"https://api.observablehq.com/{notebook}.js"
+    r = requests.get(url)
+    parser = NotebookParser()
+    for line in r.text.split("\n"):
+        parser.feed(line + "\n")
+    for cell in parser.post():
+        print (cell.text)
+
+download(sys.argv[1])
 # EOF
