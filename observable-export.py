@@ -8,6 +8,14 @@ module that does not require Observable's runtime. This is a bit of hack that ma
 Observable notebooks as literate definitions for JavaScript modules.
 """
 
+# Cells with these symbols will be skipped
+NATIVE_SKIPPED_SYMBOLS = [
+    "html"
+]
+DEFINED_SYMBOLS = [
+"md", "html", "document", "window", "Node", "NodeList", "StyleSheetList"
+]
+
 class Cell:
 
     def __init__( self, name:str, source:str, index:int ):
@@ -51,7 +59,7 @@ class Notebook:
 
     @property
     def defined( self ) -> List[Cell]:
-        return [_ for _ in self.cells if not _.source and _.isResolved]
+        return [_ for _ in self.cells if not _.source and _.isResolved and not _.isEmpty]
 
     @property
     def imports( self ) -> Dict[str,Cell]:
@@ -86,9 +94,10 @@ class Notebook:
                         cell.order = o
         # We update the key and the isResolved
         cells_map = dict( (_.name,_) for _ in cells)
+        is_skipped = lambda _:_ not in cells_map and _ in NATIVE_SKIPPED_SYMBOLS
         for cell in cells:
             cell.key = len(cells) * cell.order + cell.index
-            cell.isResolved = len([_ for _ in cell.inputs if cells_map.get(_)]) == len(cell.inputs)
+            cell.isResolved = len([_ for _ in cell.inputs if not is_skipped(_) and (cells_map.get(_) or _ in DEFINED_SYMBOLS)]) == len(cell.inputs)
         return sorted(cells, key=lambda _:_.key)
 
 
@@ -139,7 +148,9 @@ def download(notebook):
     for notebook, cells in notebook.imports.items():
         print ("import {" + ", ".join(_.name for _ in cells) + "} from '../" + notebook + "'")
     for cell in notebook.defined:
-        print (cell.text)
+       print (cell.text)
+    # for cell in notebook.cells:
+    #     print (cell.source, cell.name, cell.inputs, cell.isEmpty, cell.isResolved)
 
 download(sys.argv[1])
 # EOF
