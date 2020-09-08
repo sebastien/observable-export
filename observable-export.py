@@ -62,7 +62,7 @@ class Notebook:
         return [_ for _ in self.cells if not _.source and _.isResolved and not _.isEmpty]
 
     @property
-    def imports( self ) -> Dict[str,Cell]:
+    def imported( self ) -> Dict[str,Cell]:
         cells_by_source = {}
         for cell in self.cells:
             if cell.source:
@@ -70,7 +70,7 @@ class Notebook:
         return cells_by_source
 
     def addCell( self, name, source=None ) -> Cell:
-        self._cells.append(Cell(name, source=None, index=len(self.cells)))
+        self._cells.append(Cell(name, source=source, index=len(self.cells)))
         self.areCellsDirty = True
         return self.cell
 
@@ -86,7 +86,7 @@ class Notebook:
             cell.order += 1
         while has_changed:
             has_changed = False
-            for k, cell in own_cells_map.items():
+            for cell in own_cells:
                 if cell.inputs:
                     o = max(cell.order, max(own_cells_map[_].order + 1 if _ in own_cells_map and _ != cell.name else 0 for _ in cell.inputs) if cell.inputs else cell.order)
                     has_changed = has_changed or o != cell.order
@@ -145,12 +145,12 @@ def download(notebook):
     for line in r.text.split("\n"):
         parser.feed(line + "\n")
     notebook = parser.notebook
-    for notebook, cells in notebook.imports.items():
-        print ("import {" + ", ".join(_.name for _ in cells) + "} from '../" + notebook + "'")
+    for source, cells in notebook.imported.items():
+        print ("import {" + ", ".join(_.name for _ in cells) + "} from '../" + source + "'")
     for cell in notebook.defined:
-       print (cell.text)
-    # for cell in notebook.cells:
-    #     print (cell.source, cell.name, cell.inputs, cell.isEmpty, cell.isResolved)
+      print (cell.text)
+    # for cell in notebook.defined:
+    #    print (cell.source, cell.name, cell.inputs, cell.isEmpty, cell.isResolved)
 
 download(sys.argv[1])
 # EOF
