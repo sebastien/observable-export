@@ -1,12 +1,15 @@
 #!/usr/bin/env python3
-import json, sys, requests
+import json, sys, requests, argparse, re
 from typing import Optional, List, Dict
+from fnmatch import fnmatch
 
 __doc__ = """
 Parses ObservableHQ notebook API `https://api.observablehq.com/{notebook}.js`, returning a JavaScript
 module that does not require Observable's runtime. This is a bit of hack that makes it possible use
 Observable notebooks as literate definitions for JavaScript modules.
 """
+
+RE_PREPROCESSED = re.compile(r'^\w+`')
 
 # Cells with these symbols will be skipped
 NATIVE_SKIPPED_SYMBOLS = [
@@ -17,38 +20,48 @@ DEFINED_SYMBOLS = [
 ]
 
 class Cell:
+    """A cell defines an element of a notebook (its source). A cell might have a name,
+    a text value (as text lines) and a list of inputs (other cells, referenced by name).
+    The index is the original index of the cell, its order is the depth in the dependency
+    tree and the key can be used to sort the cells by dependency."""
 
     def __init__( self, name:str, source:str, index:int ):
-        self.name = name
-        self.source = source
-        self.inputs = []
-        self.value = []
-        self.index = index
-        self.order = 0
-        self.key = 0
-        self.isResolved = False
+        self.name:str = name
+        self.source:str = source
+        self.inputs:List[str] = []
+        self.value:List[str] = []
+        self.index:int = index
+        self.order:int = 0
+        self.key:int = 0
+        self.isResolved:bool = False
 
     @property
-    def isEmpty( self ):
+    def isPreprocessed( self ) -> bool:
+        return self.value and RE_PREPROCESSED.match(self.value[0])
+
+    @property
+    def isEmpty( self ) -> bool:
         return len(self.value) == 0
 
     @property
-    def text( self ):
+    def text( self ) -> str:
         return f"// @cell('{self.name}', {self.inputs})\nexport const {self.name} = " + "".join(self.value)
 
-    def addLine( self, line:str ):
+    def addLine( self, line:str ) -> 'Cell':
         self.value.append(line)
         return self
 
 class Notebook:
+    """A notebook is a collection of cells. Notebooks provide a variety of accessors
+    to retrieve the cells."""
 
-    def __init__( self ):
-        self._cells    = []
-        self.areCellsDirty = False
+    def __init__( self, cells=None ):
+        self._cells    = cells or []
+        self.areCellsDirty = True
 
     @property
     def cell( self ) -> Optional[Cell]:
-        return self.cells[0] if self.cells else None
+        return self._cells[-1] if self._cells else None
 
     @property
     def cells( self ):
@@ -62,15 +75,25 @@ class Notebook:
         return [_ for _ in self.cells if not _.source and _.isResolved and not _.isEmpty]
 
     @property
+    def dependencies( self ) -> Dict[str,Cell]:
+        depends = set()
+        for cell in self.defined:
+            for _ in cell.inputs:
+                depends.add(_)
+        return dict( (k,list(set(_ for _ in v if _.name in depends))) for (k,v) in self.imported.items())
+
+    @property
     def imported( self ) -> Dict[str,Cell]:
         cells_by_source = {}
         for cell in self.cells:
             if cell.source:
-                cells_by_source.setdefault(cell.source, []).append(cell)
+                cells = cells_by_source.setdefault(cell.source, [])
+                if cell not in cells:
+                    cells.append(cell)
         return cells_by_source
 
     def addCell( self, name, source=None ) -> Cell:
-        self._cells.append(Cell(name, source=source, index=len(self.cells)))
+        self._cells.append(Cell(name, source=source, index=len(self._cells)))
         self.areCellsDirty = True
         return self.cell
 
@@ -116,41 +139,69 @@ class NotebookParser:
         self.feedLineToCell = False
         self.source   = None
         self.notebook = Notebook()
+        self.cell:Optional[Cell] = None
 
     def feed( self, line ):
         if not self.feedLineToCell and line.startswith(self.NOTEBOOK):
             self.source = line[len(self.NOTEBOOK)-1:-3]
         elif line.startswith(self.NAME):
             name = json.loads(line[len(self.NAME):-2])
-            self.notebook.addCell(name, source=self.source)
+            self.cell = self.notebook.addCell(name, source=self.source)
         elif line.startswith(self.INPUTS):
             inputs = json.loads(line[len(self.INPUTS):-2])
-            cell   = self.notebook.cell
-            if cell:
-                cell.inputs = inputs
+            if self.cell:
+                assert not self.cell.inputs, "Possible parsing error, cell inputs already defined"
+                self.cell.inputs = inputs
         elif line.startswith(self.VALUE):
-            # We only
-            self.feedLineToCell = self.notebook.cell and self.notebook.cell.isEmpty and True
+            self.feedLineToCell = self.cell and self.cell.isEmpty and True
         elif line.startswith(self.END):
             self.feedLineToCell = False
+            self.cell = None
         elif self.feedLineToCell:
-            cell   = self.notebook.cell
-            if cell:
-                self.notebook.cell.addLine(line)
+            if self.cell:
+                self.cell.addLine(line)
 
-def download(notebook):
+def download(notebook:str):
     url = f"https://api.observablehq.com/{notebook}.js"
     r = requests.get(url)
     parser = NotebookParser()
     for line in r.text.split("\n"):
         parser.feed(line + "\n")
-    notebook = parser.notebook
-    for source, cells in notebook.imported.items():
-        print ("import {" + ", ".join(_.name for _ in cells) + "} from '../" + source + "'")
-    for cell in notebook.defined:
-      print (cell.text)
-    # for cell in notebook.defined:
-    #    print (cell.source, cell.name, cell.inputs, cell.isEmpty, cell.isResolved)
+    return parser.notebook
 
-download(sys.argv[1])
+def convert(notebook:Notebook):
+    imported = []
+    debug = False
+    if debug:
+        for cell in notebook.cells:
+          print (cell.source, cell.name, cell.inputs, cell.isEmpty, cell.isResolved)
+    else:
+        for source, cells in notebook.dependencies.items():
+            imports = sorted(list(set(_.name for _ in cells if _.name not in imported)))
+            imported += imports
+            print ("import {" + ", ".join(imports) + "} from '../" + source + "'")
+        for cell in notebook.defined:
+            if not cell.isPreprocessed:
+                print (cell.text)
+
+def matches(name:str, excludes:List[str]):
+    for f in excludes:
+        if f == name or fnmatch(name, f):
+            return False
+    return True
+
+def run( args=sys.argv[1:]):
+    parser = argparse.ArgumentParser(description='Extracts JavaScript modules from ObservableHQ notebooks.')
+    parser.add_argument('url', help='The URL of the notebook to convert')
+    parser.add_argument('--exclude', action="append", help='Excludes the given cell names')
+    args = parser.parse_args()
+    notebook = download(args.url)
+    if args.exclude:
+        notebook = Notebook([_ for _ in notebook.cells if matches(_.name, args.exclude)])
+    convert(notebook)
+
+
+if __name__ == "__main__":
+    run()
+
 # EOF
