@@ -132,6 +132,7 @@ class NotebookParser:
     NOTEBOOK = '  id: "@'
     NAME   = "      name: "
     INPUTS = "      inputs: "
+    FROM   = "      from: "
     VALUE  = "      value: "
     END    = ")})"
 
@@ -140,13 +141,17 @@ class NotebookParser:
         self.source   = None
         self.notebook = Notebook()
         self.cell:Optional[Cell] = None
+        self.metaFrom = None
 
     def feed( self, line ):
+        # print ("PARSED|", repr(line))
         if not self.feedLineToCell and line.startswith(self.NOTEBOOK):
             self.source = line[len(self.NOTEBOOK)-1:-3]
         elif line.startswith(self.NAME):
             name = json.loads(line[len(self.NAME):-2])
-            self.cell = self.notebook.addCell(name, source=self.source)
+            self.cell = self.notebook.addCell(name, source=self.metaFrom or self.source)
+        elif line.startswith(self.FROM):
+            self.metaFrom = json.loads(line[len(self.FROM):-2])
         elif line.startswith(self.INPUTS):
             inputs = json.loads(line[len(self.INPUTS):-2])
             if self.cell:
@@ -157,6 +162,7 @@ class NotebookParser:
         elif line.startswith(self.END):
             self.feedLineToCell = False
             self.cell = None
+            self.metaFrom = None
         elif self.feedLineToCell:
             if self.cell:
                 self.cell.addLine(line)
