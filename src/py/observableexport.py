@@ -10,7 +10,7 @@ Observable notebooks as literate definitions for JavaScript modules.
 """
 
 RE_NOTEBOOK_NAMED = re.compile(
-    r"^@?(?P<user>[a-zA-Z0-9_\-]+)/(?P<notebook>[a-zA-Z0-9_\-]+)(@(?P<rev>\d+))?$"
+    r"^@?(?P<username>[a-zA-Z0-9_\-]+)/(?P<notebook>[a-zA-Z0-9_\-]+)(@(?P<rev>\d+))?$"
 )
 RE_NOTEBOOK_PRIVATE = re.compile(r"^(?P<id>[0-9a-f]+)(@(?P<ref>\d+))?$")
 RE_PREPROCESSED = re.compile(r"^\w+`")
@@ -46,6 +46,21 @@ class Cell:
         self.key: int = 0
         self.isResolved: bool = False
 
+    def asDict(self, source=True, value=True) -> dict:
+        return {
+            k: v
+            for k, v in dict(
+                name=self.name,
+                source=self.source if source else None,
+                inputs=self.inputs,
+                value=self.value if value else None,
+                index=self.index,
+                order=self.order,
+                key=self.key,
+            ).items()
+            if v is not None
+        }
+
     @property
     def isPreprocessed(self) -> bool:
         return self.value and RE_PREPROCESSED.match(self.value[0])
@@ -70,9 +85,9 @@ class Notebook:
     """A notebook is a collection of cells. Notebooks provide a variety of accessors
     to retrieve the cells."""
 
-    def __init__(self, cells=None):
-        self._cells = cells or []
-        self.areCellsDirty = True
+    def __init__(self, cells: Optional[list[Cell]] = None):
+        self._cells: list[Cell] = cells or []
+        self.areCellsDirty: bool = True
 
     @property
     def cell(self) -> Optional[Cell]:
@@ -222,7 +237,7 @@ def download(notebook: str, key: Optional[str] = None):
             except IndexError:
                 yield None
 
-    nid, rev, user, notebook = groups(name, "id", "rev", "username", "notebook")
+    nid, rev, username, notebook = groups(name, "id", "rev", "username", "notebook")
     if nid:
         key_var = "OBSERVABLE_API_KEY"
         api_key = key or os.getenv(key_var)
@@ -243,7 +258,7 @@ def download(notebook: str, key: Optional[str] = None):
             parser.feed(line + "\n")
         return parser.notebook
     else:
-        raise RuntimeError(f"Request failed with {r.status_code}: {r.text}")
+        raise RuntimeError(f"Request to {url} failed with {r.status_code}: {r.text}")
 
 
 def convert(notebook: Notebook) -> Iterator[str]:
@@ -286,11 +301,15 @@ def run(args=sys.argv[1:]):
     )
     parser.add_argument("-o", "--output", help="Outputs to the given file")
     parser.add_argument("-k", "--api-key", help="Sets the API key to use")
+    parser.add_argument(
+        "-m", "--manifest", action="store_true", help="Adds a manifest at the end"
+    )
+    parser.add_argument("-t", "--type", help="Supports the output type: 'js' or 'json'")
     args = parser.parse_args()
     try:
         notebook = download(args.notebook, key=args.api_key)
     except RuntimeError as e:
-        sys.stderr.write("!!! ERR {e}\n")
+        sys.stderr.write(f"!!! ERR {e}\n")
         sys.stderr.flush()
         return 1
 
@@ -298,8 +317,25 @@ def run(args=sys.argv[1:]):
         notebook = Notebook([_ for _ in notebook.cells if matches(_.name, args.ignore)])
 
     def write(out) -> int:
-        for line in convert(notebook):
-            out.write(line)
+        if args.type == "json":
+            json.dump(
+                {_.name: _.asDict() for _ in notebook.cells},
+                out,
+            )
+        else:
+            for line in convert(notebook):
+                out.write(line)
+            if args.manifest:
+                manifest = (
+                    {
+                        _.name: _.asDict(source=False, value=False)
+                        for _ in notebook.cells
+                    },
+                )
+                out.write(f"export const __manifest__ = (")
+                json.dump(manifest, out)
+                out.write(");\n")
+
         out.flush()
 
     if args.output:
