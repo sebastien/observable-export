@@ -243,7 +243,8 @@ class NotebookParser:
         self.metaFrom: Optional[str] = None
 
     def feed(self, line):
-        # print("PARSED|", repr(line))
+        # DEBUG: Leaving this here as it's useful when we get parsing errors
+        # print (f"PARSED| {repr(line)}")
         if not self.feedLineToCell and (match := self.NOTEBOOK.match(line)):
             # We have a new notebook, this sets the source of the cell
             # It can be :
@@ -277,9 +278,12 @@ class NotebookParser:
                 else:
                     pass
             elif self.cell:
-                assert (
-                    not self.cell.inputs
-                ), "Possible parsing error, cell inputs already defined"
+                # If we alraedy have inputs, this means that we have a new cell
+                # , which is likely going to be anonymous
+                if self.cell.inputs:
+                    self.cell = self.notebook.addCell(
+                        None, source=self.metaFrom or self.source, type="html"
+                    )
                 self.cell.inputs = inputs
         elif line.startswith(self.VALUE):
             self.feedLineToCell = self.cell and self.cell.isEmpty and True
