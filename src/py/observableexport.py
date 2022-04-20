@@ -420,14 +420,14 @@ def asMarkdown(notebook: Notebook) -> Iterator[str]:
     for cell in notebook.cells:
         if cell.type == "md":
             yield cell.text
-            yield "\n"
+            yield "\n\n"
         else:
             yield f"```{cell.type}\n"
             if cell.name:
                 yield f"const {cell.name} = "
             for line in cell.value:
                 yield line
-            yield "```\n"
+            yield "```\n\n"
 
 
 def asModule(notebook: Notebook) -> Iterator[str]:
@@ -484,15 +484,22 @@ def run(args=sys.argv[1:]):
         action="append",
         help="Excludes the given cell names",
     )
-    parser.add_argument("-o", "--output", help="Outputs to the given file")
+    parser.add_argument("-o", "--output", help="Outputs to the given file", default="")
     parser.add_argument("-k", "--api-key", help="Sets the API key to use")
     parser.add_argument(
         "-m", "--manifest", action="store_true", help="Adds a manifest at the end"
     )
     parser.add_argument(
-        "-t", "--type", help="Supports the output type: 'js' or 'json'", default="js"
+        "-t",
+        "--type",
+        help="Supports the output type: 'js' or 'json'",
     )
     args = parser.parse_args()
+
+    # We get the format type from the args or the output format
+    output_ext = args.output.rsplit(".")[-1].lower() if "." in args.output else None
+    output_format = args.type or output_ext or "js"
+
     try:
         notebook = download(args.notebook, key=args.api_key)
     except RuntimeError as e:
@@ -507,16 +514,16 @@ def run(args=sys.argv[1:]):
         )
 
     def write(out) -> int:
-        if args.type == "json":
+        if output_format == "json":
             json.dump(
                 {_.name: _.asDict() for _ in notebook.cells},
                 out,
             )
-        elif args.type == "md":
+        elif output_format == "md":
             for line in asMarkdown(notebook):
                 out.write(line)
             out.flush()
-        elif args.type == "js":
+        elif output_format == "js":
             for line in asModule(notebook):
                 out.write(line)
             if args.manifest:
@@ -530,7 +537,9 @@ def run(args=sys.argv[1:]):
                 json.dump(manifest, out)
                 out.write(");\n")
         else:
-            raise ValueError("Supported types are json, js or md, got: {args.type} ")
+            raise ValueError(
+                "Supported types are json, js or md, got: {output_format} "
+            )
         out.flush()
         return 0
 
