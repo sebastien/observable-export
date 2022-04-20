@@ -6,8 +6,16 @@
                                                  |_|
 ```
 
-A self-contained Python script that exports ObservableHQ notebooks as a
-standalone JavaScript file that does not require the Observable runtime.
+A self-contained Python script that exports ObservableHQ notebooks to a
+variety of formats including:
+
+- A standalone JavaScript file that does not require the Observable runtime,
+  assuming your notebook doesn't contain too much Observable-specific syntax.
+
+- A standalone Markdown file that you can use to render your notebook in your
+  website.
+
+- A JSON file if you want to be able to do some other stuff with the notebook.
 
 ## Quickstart
 
@@ -43,7 +51,8 @@ Checking out a private notebook
 
 Alternatively you can set `OBSERVABLE_API_KEY` with your key.
 
-## Referencess
+## References
 
-- Observable API Keys [ObsHQ](https://observablehq.com/@observablehq/api-keys)
+- Observable API Keys [ObsHQ](https://observablehq.com/@observablehq/api-keys),
+  although this article seems a bit outdated.
 

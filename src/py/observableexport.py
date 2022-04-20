@@ -4,8 +4,10 @@ from typing import Optional, Iterator
 from fnmatch import fnmatch
 
 __doc__ = """
-Parses ObservableHQ notebook API `https://api.observablehq.com/{notebook}.js`, returning a JavaScript
-module that does not require Observable's runtime. This is a bit of hack that makes it possible use
+Parses ObservableHQ notebook API `https://api.observablehq.com/{notebook}.js`,
+creating an object model of the notebook and its cells, and allowing to convert
+it to various formats, including to JavaScript module that does not require
+Observable's runtime. This is a bit of hack that makes it possible use
 Observable notebooks as literate definitions for JavaScript modules.
 """
 
@@ -18,7 +20,7 @@ RE_PREPROCESSED = re.compile(r"^\w+`")
 # Cells with these symbols will be skipped
 NATIVE_SKIPPED_SYMBOLS = ["html"]
 
-# The list of symbols already defined in the documment.
+# The list of symbols already defined in the document.
 DEFINED_SYMBOLS = [
     "md",
     "html",
@@ -29,6 +31,14 @@ DEFINED_SYMBOLS = [
     "StyleSheetList",
 ]
 
+# The preamble can be used to define symbols that may not be already defined.
+PREAMBLE = []
+for s in DEFINED_SYMBOLS:
+    if s[0].lower() != s[0]:
+        PREAMBLE.append(f'const {s} = typeof {s} !== "undefined" ? {s} : Object;\n')
+    else:
+        PREAMBLE.append(f'const {s} = typeof {s} !== "undefined" ? {s} : _ => _;\n')
+
 
 class Cell:
     """A cell defines an element of a notebook (its source). A cell might have a name,
@@ -36,8 +46,9 @@ class Cell:
     The index is the original index of the cell, its order is the depth in the dependency
     tree and the key can be used to sort the cells by dependency."""
 
-    def __init__(self, name: str, source: str, index: int):
+    def __init__(self, name: str, source: str, index: int, type: Optional[str] = None):
         self.name: str = name
+        self.type: str = type if type else "js"
         self.source: str = source
         self.inputs: list[str] = []
         self.value: list[str] = []
@@ -51,6 +62,7 @@ class Cell:
             k: v
             for k, v in dict(
                 name=self.name,
+                type=self.type,
                 source=self.source if source else None,
                 inputs=self.inputs,
                 value=self.value if value else None,
@@ -63,7 +75,11 @@ class Cell:
 
     @property
     def isPreprocessed(self) -> bool:
-        return self.value and RE_PREPROCESSED.match(self.value[0])
+        return (
+            self.type in ("html", "md")
+            or self.value
+            and RE_PREPROCESSED.match(self.value[0])
+        )
 
     @property
     def isEmpty(self) -> bool:
@@ -71,14 +87,20 @@ class Cell:
 
     @property
     def text(self) -> str:
-        return (
-            f"// @cell('{self.name}', {self.inputs})\nexport const {self.name} = "
-            + "".join(self.value)
-        )
+        if self.type == "md":
+            return "".join(self.value).rstrip("`\n").lstrip("md`").replace("\\`", "`")
+        else:
+            return (
+                f"// @cell('{self.name}', {self.inputs})\nexport const {self.name} = "
+                + "".join(self.value)
+            )
 
     def addLine(self, line: str) -> "Cell":
         self.value.append(line)
         return self
+
+    def __repr__(self):
+        return f"(Cell {self.name} {self.type} {self.inputs})"
 
 
 class Notebook:
@@ -91,10 +113,13 @@ class Notebook:
 
     @property
     def cell(self) -> Optional[Cell]:
+        """Returns the last cell defined in this notebook"""
         return self._cells[-1] if self._cells else None
 
     @property
     def cells(self):
+        """Returns the eclls in this notebook. This takes care of normalising
+        the cells when necessary."""
         if self.areCellsDirty:
             self._cells = self.normaliseCells(self._cells)
             self.areCellsDirty = False
@@ -102,6 +127,7 @@ class Notebook:
 
     @property
     def defined(self) -> list[Cell]:
+        """Returns the list of cells that are *defined* in this notebook."""
         return [
             _ for _ in self.cells if not _.source and _.isResolved and not _.isEmpty
         ]
@@ -118,8 +144,8 @@ class Notebook:
         )
 
     @property
-    def imported(self) -> dict[str, Cell]:
-        cells_by_source = {}
+    def imported(self) -> dict[str, list[Cell]]:
+        cells_by_source: dict[str, list[Cell]] = {}
         for cell in self.cells:
             if cell.source:
                 cells = cells_by_source.setdefault(cell.source, [])
@@ -127,8 +153,19 @@ class Notebook:
                     cells.append(cell)
         return cells_by_source
 
-    def addCell(self, name, source=None) -> Cell:
-        self._cells.append(Cell(name, source=source, index=len(self._cells)))
+    def addCell(
+        self, name: Optional[str], source=None, type: Optional[str] = None
+    ) -> Cell:
+        """Adds the cell with the given name and source. This will not check
+        if there is already a cell with the given name defined."""
+        self._cells.append(
+            Cell(
+                name if name else f"__CELL_{len(self._cells)}__",
+                source=source,
+                type=type,
+                index=len(self._cells),
+            )
+        )
         self.areCellsDirty = True
         return self.cell
 
@@ -180,6 +217,8 @@ class NotebookParser:
     notebook exports to be formatted the same way, so it might need updates
     along the way."""
 
+    # SEE: https://api.observablehq.com/@sebastien/boilerplate.js
+    # NOTE: We use hardcoded spaces so that we don't match the body by accident.
     NOTEBOOK = '  id: "@'
     NAME = "      name: "
     INPUTS = "      inputs: "
@@ -189,23 +228,39 @@ class NotebookParser:
 
     def __init__(self):
         self.feedLineToCell = False
-        self.source = None
+        self.source: Optional[str] = None
         self.notebook = Notebook()
         self.cell: Optional[Cell] = None
-        self.metaFrom = None
+        self.metaFrom: Optional[str] = None
 
     def feed(self, line):
         # print ("PARSED|", repr(line))
         if not self.feedLineToCell and line.startswith(self.NOTEBOOK):
+            # We have a new notebook, this sets the source of the cell
             self.source = line[len(self.NOTEBOOK) - 1 : -3]
         elif line.startswith(self.NAME):
+            # We have the name of the cell, which is going to be a string after the `name:`
             name = json.loads(line[len(self.NAME) : -2])
             self.cell = self.notebook.addCell(name, source=self.metaFrom or self.source)
         elif line.startswith(self.FROM):
+            # If we have a from, then it means the cell is imported from
+            # another notebook.
             self.metaFrom = json.loads(line[len(self.FROM) : -2])
         elif line.startswith(self.INPUTS):
+            # WE log the inputs of the cell
             inputs = json.loads(line[len(self.INPUTS) : -2])
-            if self.cell:
+            if not self.cell:
+                if inputs == ["md"]:
+                    self.cell = self.notebook.addCell(
+                        None, source=self.metaFrom or self.source, type="md"
+                    )
+                elif inputs == ["html"]:
+                    self.cell = self.notebook.addCell(
+                        None, source=self.metaFrom or self.source, type="html"
+                    )
+                else:
+                    pass
+            elif self.cell:
                 assert (
                     not self.cell.inputs
                 ), "Possible parsing error, cell inputs already defined"
@@ -213,6 +268,8 @@ class NotebookParser:
         elif line.startswith(self.VALUE):
             self.feedLineToCell = self.cell and self.cell.isEmpty and True
         elif line.startswith(self.END):
+            # We've reached the end of a cell declaration, so we reset
+            # our state.
             self.feedLineToCell = False
             self.cell = None
             self.metaFrom = None
@@ -261,20 +318,38 @@ def download(notebook: str, key: Optional[str] = None):
         raise RuntimeError(f"Request to {url} failed with {r.status_code}: {r.text}")
 
 
-def convert(notebook: Notebook) -> Iterator[str]:
+def asJSON(notebook: Notebook) -> str:
+    return json.dumps(
+        {_.name: _.asDict() for _ in notebook.cells},
+    )
+
+
+def asMarkdown(notebook: Notebook) -> Iterator[str]:
+    """Converts the Observable notebook as a Markdown document."""
+    for cell in notebook.cells:
+        if cell.type == "md":
+            yield cell.text
+            yield "\n"
+        else:
+            yield f"```{cell.type}\n"
+            if cell.name:
+                yield f"const {cell.name} = "
+            for line in cell.value:
+                yield line
+            yield "```\n"
+
+
+def asModule(notebook: Notebook) -> Iterator[str]:
+    """Converts the Observable notebook as a JavaScript module."""
     imported = []
     debug = False
-    if debug:
-        for cell in notebook.cells:
-            print(cell.source, cell.name, cell.inputs, cell.isEmpty, cell.isResolved)
-    else:
-        for source, cells in notebook.dependencies.items():
-            imports = sorted(list(set(_.name for _ in cells if _.name not in imported)))
-            imported += imports
-            yield "import {" + ", ".join(imports) + "} from '../" + source + "'\n"
-        for cell in notebook.defined:
-            if not cell.isPreprocessed:
-                yield cell.text
+    for source, cells in notebook.dependencies.items():
+        imports = sorted(list(set(_.name for _ in cells if _.name not in imported)))
+        imported += imports
+        yield "import {" + ", ".join(imports) + "} from '../" + source + "'\n"
+    for cell in notebook.defined:
+        if not cell.isPreprocessed:
+            yield cell.text
 
 
 def matches(name: str, excludes: list[str]) -> bool:
@@ -322,8 +397,12 @@ def run(args=sys.argv[1:]):
                 {_.name: _.asDict() for _ in notebook.cells},
                 out,
             )
-        else:
-            for line in convert(notebook):
+        elif args.type == "md":
+            for line in asMarkdown(notebook):
+                out.write(line)
+            out.flush()
+        elif args.type == "js":
+            for line in asModule(notebook):
                 out.write(line)
             if args.manifest:
                 manifest = (
@@ -335,7 +414,8 @@ def run(args=sys.argv[1:]):
                 out.write(f"export const __manifest__ = (")
                 json.dump(manifest, out)
                 out.write(");\n")
-
+        else:
+            raise ValueError("Supported types are json, js or md, got: {args.type} ")
         out.flush()
 
     if args.output:
