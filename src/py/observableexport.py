@@ -48,8 +48,16 @@ class Cell:
     The index is the original index of the cell, its order is the depth in the dependency
     tree and the key can be used to sort the cells by dependency."""
 
-    def __init__(self, name: str, source: str, index: int, type: Optional[str] = None):
+    def __init__(
+        self,
+        name: str,
+        source: str,
+        index: int,
+        type: Optional[str] = None,
+        sourceName: Optional[str] = None,
+    ):
         self.name: str = name
+        self.sourceName: Optional[str] = sourceName
         self.type: str = type if type else "js"
         self.source: str = source
         self.inputs: list[str] = []
@@ -66,6 +74,7 @@ class Cell:
                 name=self.name,
                 type=self.type,
                 source=self.source if source else None,
+                sourceName=self.sourceName,
                 inputs=self.inputs,
                 value=self.value if value else None,
                 index=self.index,
@@ -102,7 +111,7 @@ class Cell:
         return self
 
     def __repr__(self):
-        return f"(Cell {self.name} {self.type} {self.inputs})"
+        return f"(Cell {self.name}{':' + self.sourceName if self.sourceName else ''} {self.type} {self.inputs})"
 
 
 class Notebook:
@@ -133,6 +142,11 @@ class Notebook:
         return self._cells
 
     @property
+    def cellsByName(self) -> dict[str, Cell]:
+        """Returns the cells by name."""
+        return {_.name: _ for _ in self.cells}
+
+    @property
     def defined(self) -> list[Cell]:
         """Returns the list of cells that are *defined* in this notebook."""
         return [
@@ -142,18 +156,20 @@ class Notebook:
         ]
 
     @property
-    def dependencies(self) -> dict[str, Cell]:
+    def dependencies(self) -> dict[str, list[Cell]]:
+        """Returns a map of cell names to their list of dependencies."""
         depends = set()
         for cell in self.defined:
             for _ in cell.inputs:
                 depends.add(_)
-        return dict(
-            (k, list(set(_ for _ in v if _.name in depends)))
+        return {
+            k: list(set(_ for _ in v if _.name in depends))
             for (k, v) in self.imported.items()
-        )
+        }
 
     @property
     def imported(self) -> dict[str, list[Cell]]:
+        """Returns the list of imported cells, grouped by source."""
         cells_by_source: dict[str, list[Cell]] = {}
         for cell in self.cells:
             if cell.source and cell.source != self.id:
@@ -163,7 +179,11 @@ class Notebook:
         return cells_by_source
 
     def addCell(
-        self, name: Optional[str], source=None, type: Optional[str] = None
+        self,
+        name: Optional[str],
+        source=None,
+        sourceName: Optional[str] = None,
+        type: Optional[str] = None,
     ) -> Cell:
         """Adds the cell with the given name and source. This will not check
         if there is already a cell with the given name defined."""
@@ -171,6 +191,7 @@ class Notebook:
             Cell(
                 name if name else f"__CELL_{len(self._cells)}__",
                 source=source,
+                sourceName=sourceName,
                 type=type,
                 index=len(self._cells),
             )
@@ -232,19 +253,29 @@ class NotebookParser:
     NAME = "      name: "
     INPUTS = "      inputs: "
     FROM = "      from: "
+    REMOTE = re.compile('^      remote: "(?P<name>[^"]+)"')
     VALUE = "      value: "
-    END = ")})"
+    # This is the end of aregular
+    END_FUNCTION = ")})"
+    # This is the end of special cells (mutable view, etc)
+    END_VALUE = "    },"
+    RE_INPUT_FUNCTION = re.compile(r"\(function\([^\)]*\)\{return\(")
 
     def __init__(self, id: Optional[str] = None):
         self.feedLineToCell = False
         self.source: Optional[str] = None
         self.notebook = Notebook(id=id)
         self.cell: Optional[Cell] = None
+        # Used to keep track of the from (source) of a cell
         self.metaFrom: Optional[str] = None
+        # Used to keep track of the original (source) name of an imported cell
+        self.metaRemote: Optional[str] = None
+        # Tells if the cell is defined as a function
+        self.isCellFunction = False
 
     def feed(self, line):
         # DEBUG: Leaving this here as it's useful when we get parsing errors
-        # print (f"PARSED| {repr(line)}")
+        # print(f"PARSED| {repr(line)}")
         if not self.feedLineToCell and (match := self.NOTEBOOK.match(line)):
             # We have a new notebook, this sets the source of the cell
             # It can be :
@@ -257,42 +288,82 @@ class NotebookParser:
                 self.notebook.id = self.source
         elif line.startswith(self.NAME):
             # We have the name of the cell, which is going to be a string after the `name:`
-            name = json.loads(line[len(self.NAME) : -2])
-            self.cell = self.notebook.addCell(name, source=self.metaFrom or self.source)
+            # Note that Observable has "initial XXX" or "viewof XXX" as names
+            # of special cells (views, and mutable cells). We normalise the names
+            # by replacing spaces with underscore, which may triger some name
+            # clashes.
+            name = json.loads(line[len(self.NAME) : -2]).replace(" ", "_")
+            self.cell = self.notebook.addCell(
+                name, source=self.metaFrom or self.source, sourceName=self.metaRemote
+            )
         elif line.startswith(self.FROM):
             # If we have a from, then it means the cell is imported from
             # another notebook.
             self.metaFrom = json.loads(line[len(self.FROM) : -2])
+        elif match := self.REMOTE.match(line):
+            # Symbols imported like "import {X as Y}" will have a
+            # `remote:` attribute.
+            self.metaRemote = remote = match.group("name")
+            # This may not work in all cases, if "remote:" comes
+            # before the name, this will break.
+            if self.cell and self.cell.name and self.cell.name != remote:
+                self.cell.sourceName = self.metaRemote
         elif line.startswith(self.INPUTS):
-            # WE log the inputs of the cell
-            inputs = json.loads(line[len(self.INPUTS) : -2])
+            # We capture the inputs of the cell
+            inputs = [
+                _.replace(" ", "_") for _ in json.loads(line[len(self.INPUTS) : -2])
+            ]
             if not self.cell:
                 if inputs == ["md"]:
                     self.cell = self.notebook.addCell(
-                        None, source=self.metaFrom or self.source, type="md"
+                        None,
+                        source=self.metaFrom or self.source,
+                        sourceName=self.metaRemote,
+                        type="md",
                     )
                 elif inputs == ["html"]:
                     self.cell = self.notebook.addCell(
-                        None, source=self.metaFrom or self.source, type="html"
+                        None,
+                        source=self.metaFrom or self.source,
+                        sourceName=self.metaRemote,
+                        type="html",
                     )
                 else:
                     pass
             elif self.cell:
-                # If we alraedy have inputs, this means that we have a new cell
-                # , which is likely going to be anonymous
+                # If we already have inputs, this means that we have a new cell,
+                # which is likely going to be anonymous
                 if self.cell.inputs:
                     self.cell = self.notebook.addCell(
-                        None, source=self.metaFrom or self.source, type="html"
+                        None,
+                        source=self.metaFrom or self.source,
+                        sourceName=self.metaRemote,
+                        type="html",
                     )
                 self.cell.inputs = inputs
         elif line.startswith(self.VALUE):
             self.feedLineToCell = self.cell and self.cell.isEmpty and True
-        elif line.startswith(self.END):
+            rest = line[len(self.VALUE) :]
+            # Observable function declarations will start with
+            # that prefix. This is a bit awkward, but besically we use
+            # the `isCellFunction` flag to disambiguate between a cell
+            # that is a function from a cell that is just a value.
+            if self.RE_INPUT_FUNCTION.match(rest):
+                self.isCellFunction = True
+            elif self.cell:
+                self.cell.addLine(rest)
+                self.isCellFunction = False
+        elif (self.isCellFunction and line.startswith(self.END_FUNCTION)) or (
+            (not self.isCellFunction) and line.startswith(self.END_VALUE)
+        ):
             # We've reached the end of a cell declaration, so we reset
             # our state.
+            # TODO: I suspect we need to rewrite the VALUE/END to work in all cases
             self.feedLineToCell = False
             self.cell = None
             self.metaFrom = None
+            self.metaRemote = None
+            self.isCellFunction = False
         elif self.feedLineToCell:
             if self.cell:
                 self.cell.addLine(line)
@@ -362,18 +433,32 @@ def asMarkdown(notebook: Notebook) -> Iterator[str]:
 def asModule(notebook: Notebook) -> Iterator[str]:
     """Converts the Observable notebook as a JavaScript module."""
     imported = []
+    cells_by_name = notebook.cellsByName
     for source, cells in notebook.dependencies.items():
         imports = sorted(list(set(_.name for _ in cells if _.name not in imported)))
+
         if imports:
             imported += imports
             prefix = "./" if notebook.isPrivate else "../"
             matched = RE_NOTEBOOK.match(source)
             assert matched, f"Could not parse source: {source}"
-            yield "import {" + ", ".join(imports) + "} from '" + prefix + (
+            imported_names = (
+                f"{_.name} as {_.sourceName}" if _.sourceName else _.name
+                for _ in (cells_by_name[_] for _ in imports)
+            )
+            yield "import {" + ", ".join(imported_names) + "} from '" + prefix + (
                 matched.group("name")
             ) + ".js'\n"
     for cell in notebook.defined:
-        if not cell.isPreprocessed:
+        # We filter out ObservableHQ specific viewof and initial (mutable)
+        # variables. We should probably tag the cells.
+        if cell.name.startswith("viewof_"):
+            continue
+        elif cell.name.startswith("initial_"):
+            continue
+        elif cell.name.startswith("mutable_"):
+            continue
+        elif not cell.isPreprocessed:
             yield cell.text
 
 
@@ -404,7 +489,9 @@ def run(args=sys.argv[1:]):
     parser.add_argument(
         "-m", "--manifest", action="store_true", help="Adds a manifest at the end"
     )
-    parser.add_argument("-t", "--type", help="Supports the output type: 'js' or 'json'")
+    parser.add_argument(
+        "-t", "--type", help="Supports the output type: 'js' or 'json'", default="js"
+    )
     args = parser.parse_args()
     try:
         notebook = download(args.notebook, key=args.api_key)
