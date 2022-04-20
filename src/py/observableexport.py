@@ -11,10 +11,12 @@ Observable's runtime. This is a bit of hack that makes it possible use
 Observable notebooks as literate definitions for JavaScript modules.
 """
 
-RE_NOTEBOOK_NAMED = re.compile(
-    r"^@?(?P<username>[a-zA-Z0-9_\-]+)/(?P<notebook>[a-zA-Z0-9_\-]+)(@(?P<rev>\d+))?$"
-)
-RE_NOTEBOOK_PRIVATE = re.compile(r"^(?P<id>[0-9a-f]+)(@(?P<ref>\d+))?$")
+NOTEBOOK_NAME = r"@?(?P<username>[a-zA-Z0-9_\-]+)/(?P<notebook>[a-zA-Z0-9_\-]+)"
+NOTEBOOK_HASH = f"(?P<id>{'[0-9a-f]' * 16})"
+NOTEBOOK_REV = r"(@(?P<rev>\d+))?"
+RE_NOTEBOOK_NAMED = re.compile(f"^{NOTEBOOK_NAME}{NOTEBOOK_REV}$")
+RE_NOTEBOOK_PRIVATE = re.compile(f"^{NOTEBOOK_HASH}{NOTEBOOK_REV}$")
+RE_NOTEBOOK = re.compile(f"^(?P<name>{NOTEBOOK_HASH}|{NOTEBOOK_NAME}){NOTEBOOK_REV}$")
 RE_PREPROCESSED = re.compile(r"^\w+`")
 
 # Cells with these symbols will be skipped
@@ -107,9 +109,14 @@ class Notebook:
     """A notebook is a collection of cells. Notebooks provide a variety of accessors
     to retrieve the cells."""
 
-    def __init__(self, cells: Optional[list[Cell]] = None):
+    def __init__(self, id: Optional[str] = None, cells: Optional[list[Cell]] = None):
+        self.id: Optional[str] = id
         self._cells: list[Cell] = cells or []
         self.areCellsDirty: bool = True
+
+    @property
+    def isPrivate(self) -> bool:
+        return self.id and RE_NOTEBOOK_PRIVATE.match(self.id)
 
     @property
     def cell(self) -> Optional[Cell]:
@@ -118,7 +125,7 @@ class Notebook:
 
     @property
     def cells(self):
-        """Returns the eclls in this notebook. This takes care of normalising
+        """Returns the cells in this notebook. This takes care of normalising
         the cells when necessary."""
         if self.areCellsDirty:
             self._cells = self.normaliseCells(self._cells)
@@ -129,7 +136,9 @@ class Notebook:
     def defined(self) -> list[Cell]:
         """Returns the list of cells that are *defined* in this notebook."""
         return [
-            _ for _ in self.cells if not _.source and _.isResolved and not _.isEmpty
+            _
+            for _ in self.cells
+            if _.source in (None, self.id) and _.isResolved and not _.isEmpty
         ]
 
     @property
@@ -147,7 +156,7 @@ class Notebook:
     def imported(self) -> dict[str, list[Cell]]:
         cells_by_source: dict[str, list[Cell]] = {}
         for cell in self.cells:
-            if cell.source:
+            if cell.source and cell.source != self.id:
                 cells = cells_by_source.setdefault(cell.source, [])
                 if cell not in cells:
                     cells.append(cell)
@@ -219,25 +228,32 @@ class NotebookParser:
 
     # SEE: https://api.observablehq.com/@sebastien/boilerplate.js
     # NOTE: We use hardcoded spaces so that we don't match the body by accident.
-    NOTEBOOK = '  id: "@'
+    NOTEBOOK = re.compile(r'  id: "(?P<id>[^"]+)",')
     NAME = "      name: "
     INPUTS = "      inputs: "
     FROM = "      from: "
     VALUE = "      value: "
     END = ")})"
 
-    def __init__(self):
+    def __init__(self, id: Optional[str] = None):
         self.feedLineToCell = False
         self.source: Optional[str] = None
-        self.notebook = Notebook()
+        self.notebook = Notebook(id=id)
         self.cell: Optional[Cell] = None
         self.metaFrom: Optional[str] = None
 
     def feed(self, line):
-        # print ("PARSED|", repr(line))
-        if not self.feedLineToCell and line.startswith(self.NOTEBOOK):
+        # print("PARSED|", repr(line))
+        if not self.feedLineToCell and (match := self.NOTEBOOK.match(line)):
             # We have a new notebook, this sets the source of the cell
-            self.source = line[len(self.NOTEBOOK) - 1 : -3]
+            # It can be :
+            # - @username/notebook
+            # - @username/notebook@version
+            # - XXXXXXXXXXXXXXX
+            # - XXXXXXXXXXXXXXX@version
+            self.source = match.group("id") or match.group()
+            if not self.notebook.id:
+                self.notebook.id = self.source
         elif line.startswith(self.NAME):
             # We have the name of the cell, which is going to be a string after the `name:`
             name = json.loads(line[len(self.NAME) : -2])
@@ -297,7 +313,7 @@ def download(notebook: str, key: Optional[str] = None):
     nid, rev, username, notebook = groups(name, "id", "rev", "username", "notebook")
     if nid:
         key_var = "OBSERVABLE_API_KEY"
-        api_key = key or os.getenv(key_var)
+        api_key = (key or os.getenv(key_var) or "").strip("\n").strip()
         if not api_key:
             raise RuntimeError(
                 f"Missing Observable API key variable {key_var}, visit https://observablehq.com/settings/api-keys to create one"
@@ -342,11 +358,16 @@ def asMarkdown(notebook: Notebook) -> Iterator[str]:
 def asModule(notebook: Notebook) -> Iterator[str]:
     """Converts the Observable notebook as a JavaScript module."""
     imported = []
-    debug = False
     for source, cells in notebook.dependencies.items():
         imports = sorted(list(set(_.name for _ in cells if _.name not in imported)))
-        imported += imports
-        yield "import {" + ", ".join(imports) + "} from '../" + source + "'\n"
+        if imports:
+            imported += imports
+            prefix = "./" if notebook.isPrivate else "../"
+            matched = RE_NOTEBOOK.match(source)
+            assert matched, f"Could not parse source: {source}"
+            yield "import {" + ", ".join(imports) + "} from '" + prefix + (
+                matched.group("name")
+            ) + ".js'\n"
     for cell in notebook.defined:
         if not cell.isPreprocessed:
             yield cell.text
@@ -389,7 +410,10 @@ def run(args=sys.argv[1:]):
         return 1
 
     if args.ignore:
-        notebook = Notebook([_ for _ in notebook.cells if matches(_.name, args.ignore)])
+        notebook = Notebook(
+            id=notebook.id,
+            cells=[_ for _ in notebook.cells if matches(_.name, args.ignore)],
+        )
 
     def write(out) -> int:
         if args.type == "json":
@@ -417,6 +441,7 @@ def run(args=sys.argv[1:]):
         else:
             raise ValueError("Supported types are json, js or md, got: {args.type} ")
         out.flush()
+        return 0
 
     if args.output:
         with open(args.output, "w") as f:
