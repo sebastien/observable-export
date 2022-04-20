@@ -443,7 +443,7 @@ def asModule(notebook: Notebook) -> Iterator[str]:
             matched = RE_NOTEBOOK.match(source)
             assert matched, f"Could not parse source: {source}"
             imported_names = (
-                f"{_.name} as {_.sourceName}" if _.sourceName else _.name
+                f"{_.sourceName} as {_.name}" if _.sourceName else _.name
                 for _ in (cells_by_name[_] for _ in imports)
             )
             yield "import {" + ", ".join(imported_names) + "} from '" + prefix + (
