@@ -434,8 +434,19 @@ def asModule(notebook: Notebook) -> Iterator[str]:
     """Converts the Observable notebook as a JavaScript module."""
     imported = []
     cells_by_name = notebook.cellsByName
+    cells_defined = {_.name: _ for _ in notebook.defined}
     for source, cells in notebook.dependencies.items():
-        imports = sorted(list(set(_.name for _ in cells if _.name not in imported)))
+        # NOTE: We will skip any cell that is imported but then
+        # shadowed by a defined cell.
+        imports = sorted(
+            list(
+                set(
+                    _.name
+                    for _ in cells
+                    if _.name not in imported and _.name not in cells_defined
+                )
+            )
+        )
 
         if imports:
             imported += imports
@@ -485,6 +496,13 @@ def run(args=sys.argv[1:]):
         help="Excludes the given cell names",
     )
     parser.add_argument("-o", "--output", help="Outputs to the given file", default="")
+    parser.add_argument(
+        "-a",
+        "--append",
+        action="store_true",
+        help="Appends to the output file",
+        default=False,
+    )
     parser.add_argument("-k", "--api-key", help="Sets the API key to use")
     parser.add_argument(
         "-m", "--manifest", action="store_true", help="Adds a manifest at the end"
@@ -544,7 +562,7 @@ def run(args=sys.argv[1:]):
         return 0
 
     if args.output:
-        with open(args.output, "w") as f:
+        with open(args.output, "a" if args.append else "w") as f:
             return write(f)
     else:
         return write(sys.stdout)
