@@ -430,10 +430,16 @@ def asMarkdown(notebook: Notebook) -> Iterator[str]:
             yield "```\n\n"
 
 
-def asModule(notebook: Notebook) -> Iterator[str]:
+def asModule(notebook: Notebook, transitiveExports=False) -> Iterator[str]:
     """Converts the Observable notebook as a JavaScript module."""
+
+    # --
+    # We start with the imported cells, which are found in the
+    # notebook dependencies.
     imported_cells: dict[str, Cell] = {}
     cells_defined: dict[str, Cell] = {_.name: _ for _ in notebook.defined}
+    # The dependencies are a list of cells grouped by source (notebook)
+    # name.
     for source, cells in notebook.dependencies.items():
         # NOTE: We will skip any cell that is imported but then
         # shadowed by a defined cell.
@@ -448,14 +454,28 @@ def asModule(notebook: Notebook) -> Iterator[str]:
             prefix = "./" if notebook.isPrivate else "../"
             matched = RE_NOTEBOOK.match(source)
             assert matched, f"Could not parse source as a notebook: {source}"
+            # NOTE: We renamed the cells with `__` as a prefix so that they
+            # don't clash when we export them.
             import_names = (
-                f"{_.sourceName} as {_.name}" if _.sourceName else _.name
-                for _ in import_cells.values()
+                f"{cell.sourceName or cell.name} as __{name}"
+                if transitiveExports
+                else (f"{cell.sourceName} as {name}" if cell.sourceName else name)
+                for name, cell in import_cells.items()
             )
             yield "import {" + ", ".join(import_names) + "} from '" + prefix + (
                 matched.group("name")
             ) + ".js'\n"
 
+    if transitiveExports:
+        # --
+        # We transitively export the imported cells, which is what is
+        # expected in Observable.
+        for name in imported_cells:
+            yield f"export const {name} = __{name};\n"
+
+    # --
+    # We output the defined notebook cells, skipping the views and the
+    # mutable ones.
     for cell in notebook.defined:
         # We filter out ObservableHQ specific viewof and initial (mutable)
         # variables. We should probably tag the cells.
@@ -467,6 +487,8 @@ def asModule(notebook: Notebook) -> Iterator[str]:
             continue
         elif not cell.isPreprocessed:
             yield cell.text
+
+    yield "// EOF"
 
 
 def matches(name: str, excludes: list[str]) -> bool:
@@ -508,6 +530,13 @@ def run(args=sys.argv[1:]):
         "--type",
         help="Supports the output type: 'js' or 'json'",
     )
+    parser.add_argument(
+        "--transitive-exports",
+        action="store_true",
+        help="Notebooks re-export their imported symbols (js only)",
+        default=False,
+    )
+
     args = parser.parse_args()
 
     # We get the format type from the args or the output format
@@ -538,7 +567,7 @@ def run(args=sys.argv[1:]):
                 out.write(line)
             out.flush()
         elif output_format == "js":
-            for line in asModule(notebook):
+            for line in asModule(notebook, transitiveExports=args.transitive_exports):
                 out.write(line)
             if args.manifest:
                 manifest = (
