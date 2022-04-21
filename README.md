@@ -24,9 +24,11 @@ By downloading the script directly:
     curl -o observableexport.py https://raw.githubusercontent.com/sebastien/observable-export/main/src/py/observableexport.py 
     python ./observableexport.py @sebastien/boilerplate
 
-or using PIP:
+or by using PIP
 
     python -m pip install --user observable-export
+
+Note that *observable-export* required *Python 3.9+*.
 
 ## Examples
 

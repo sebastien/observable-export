@@ -2,6 +2,7 @@
 import json, sys, requests, argparse, re, os
 from typing import Optional, Iterator
 from fnmatch import fnmatch
+from graphlib import TopologicalSorter
 
 __doc__ = """
 Parses ObservableHQ notebook API `https://api.observablehq.com/{notebook}.js`,
@@ -199,39 +200,24 @@ class Notebook:
         self.areCellsDirty = True
         return self.cell
 
-    def normaliseCells(self, cells):
+    def normaliseCells(self, cells: list[Cell]) -> list[Cell]:
         """Brute force prioritization of cells based on dependencies. This would
         fail with a cycle, but we assume that the Observable notebook contains
         none."""
-        has_changed = True
-        own_cells = [_ for _ in cells if _.isResolved]
-        own_cells_map = dict((_.name, _) for _ in own_cells)
-        # All own cells start at order 1
-        for cell in own_cells:
-            cell.order += 1
-        while has_changed:
-            has_changed = False
-            for cell in own_cells:
-                if cell.inputs:
-                    o = max(
-                        cell.order,
-                        max(
-                            own_cells_map[_].order + 1
-                            if _ in own_cells_map and _ != cell.name
-                            else 0
-                            for _ in cell.inputs
-                        )
-                        if cell.inputs
-                        else cell.order,
-                    )
-                    has_changed = has_changed or o != cell.order
-                    if has_changed:
-                        cell.order = o
-        # We update the key and the isResolved
+        # We apply the topological sort to get the order of each cell
+        cells_map = {_.name: _ for _ in cells}
+        cells_graph = {_.name: _.inputs for _ in cells}
+        cells_order = [_ for _ in TopologicalSorter(cells_graph).static_order()]
+        for order, name in enumerate(cells_order):
+            if name in cells_map:
+                cells_map[name].order = order
+
+        # We update the isResolved status
         cells_map = dict((_.name, _) for _ in cells)
         is_skipped = lambda _: _ not in cells_map and _ in NATIVE_SKIPPED_SYMBOLS
         for cell in cells:
-            cell.key = len(cells) * cell.order + cell.index
+            # A resolved cells means that all its inputs are in the cells map
+            # or are DEFINED_SYMBOLS
             cell.isResolved = len(
                 [
                     _
@@ -239,7 +225,7 @@ class Notebook:
                     if not is_skipped(_) and (cells_map.get(_) or _ in DEFINED_SYMBOLS)
                 ]
             ) == len(cell.inputs)
-        return sorted(cells, key=lambda _: _.key)
+        return sorted(cells, key=lambda _: _.order)
 
 
 class NotebookParser:
