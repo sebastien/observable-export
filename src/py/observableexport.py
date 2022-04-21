@@ -432,34 +432,30 @@ def asMarkdown(notebook: Notebook) -> Iterator[str]:
 
 def asModule(notebook: Notebook) -> Iterator[str]:
     """Converts the Observable notebook as a JavaScript module."""
-    imported = []
-    cells_by_name = notebook.cellsByName
-    cells_defined = {_.name: _ for _ in notebook.defined}
+    imported_cells: dict[str, Cell] = {}
+    cells_defined: dict[str, Cell] = {_.name: _ for _ in notebook.defined}
     for source, cells in notebook.dependencies.items():
         # NOTE: We will skip any cell that is imported but then
         # shadowed by a defined cell.
-        imports = sorted(
-            list(
-                set(
-                    _.name
-                    for _ in cells
-                    if _.name not in imported and _.name not in cells_defined
-                )
-            )
-        )
+        import_cells: dict[str, Cell] = {
+            _.name: _
+            for _ in cells
+            if (_.name not in imported_cells) and (_.name not in cells_defined)
+        }
 
-        if imports:
-            imported += imports
+        if import_cells:
+            imported_cells.update(import_cells)
             prefix = "./" if notebook.isPrivate else "../"
             matched = RE_NOTEBOOK.match(source)
-            assert matched, f"Could not parse source: {source}"
-            imported_names = (
+            assert matched, f"Could not parse source as a notebook: {source}"
+            import_names = (
                 f"{_.sourceName} as {_.name}" if _.sourceName else _.name
-                for _ in (cells_by_name[_] for _ in imports)
+                for _ in import_cells.values()
             )
-            yield "import {" + ", ".join(imported_names) + "} from '" + prefix + (
+            yield "import {" + ", ".join(import_names) + "} from '" + prefix + (
                 matched.group("name")
             ) + ".js'\n"
+
     for cell in notebook.defined:
         # We filter out ObservableHQ specific viewof and initial (mutable)
         # variables. We should probably tag the cells.
