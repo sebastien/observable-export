@@ -12,6 +12,10 @@ Observable's runtime. This is a bit of hack that makes it possible use
 Observable notebooks as literate definitions for JavaScript modules.
 """
 
+# TODO: Rewrite the parser, it's not amazing
+# TODO: Support listing notebooks (including private)
+# TODO: Support listing notebook revisions(including private)
+
 NOTEBOOK_NAME = r"@?(?P<username>[a-zA-Z0-9_\-]+)/(?P<notebook>[a-zA-Z0-9_\-]+)"
 NOTEBOOK_HASH = f"(?P<id>{'[0-9a-f]' * 16})"
 NOTEBOOK_REV = r"(@(?P<rev>\d+))?"
@@ -118,7 +122,7 @@ class Cell:
         return self
 
     def __repr__(self):
-        return f"(Cell {self.name}{':' + self.sourceName if self.sourceName else ''} {self.type} {self.inputs})"
+        return f"(Cell#{id(self)} {self.name}@{self.source}{':' + self.sourceName if self.sourceName else ''} {self.type} {self.inputs})"
 
 
 class Notebook:
@@ -279,6 +283,11 @@ class NotebookParser:
             # - XXXXXXXXXXXXXXX
             # - XXXXXXXXXXXXXXX@version
             self.source = match.group("id") or match.group()
+            self.feedLineToCell = False
+            self.cell = None
+            self.metaFrom = None
+            self.metaRemote = None
+            self.isCellFunction = False
             if not self.notebook.id:
                 self.notebook.id = self.source
         elif line.startswith(self.NAME):
