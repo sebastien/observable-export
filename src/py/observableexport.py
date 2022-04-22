@@ -87,6 +87,8 @@ class Cell:
 
     @property
     def isPreprocessed(self) -> bool:
+        """A preprocessed cell has content passed through a
+        template string, like `md` or `html`."""
         return (
             self.type in ("html", "md")
             or self.value
@@ -95,12 +97,16 @@ class Cell:
 
     @property
     def isEmpty(self) -> bool:
+        """And empty cell has no value"""
         return len(self.value) == 0
 
     @property
     def text(self) -> str:
-        if self.type == "md":
-            return "".join(self.value).rstrip("`\n").lstrip("md`").replace("\\`", "`")
+        """Returns the cell's text as a single string"""
+        if self.type in ("md", "html"):
+            return (
+                "".join(self.value).rstrip("`\n").lstrip(f"{type}`").replace("\\`", "`")
+            )
         else:
             return (
                 f"// @cell('{self.name}', {self.inputs})\nexport const {self.name} = "
@@ -140,6 +146,7 @@ class Notebook:
         if self.areCellsDirty:
             self._cells = self.normaliseCells(self._cells)
             self.areCellsDirty = False
+        self._cells = self.normaliseCells(self._cells)
         return self._cells
 
     @property
@@ -198,6 +205,7 @@ class Notebook:
             )
         )
         self.areCellsDirty = True
+        assert self.cell, f"Should not leave with a None cell"
         return self.cell
 
     def normaliseCells(self, cells: list[Cell]) -> list[Cell]:
@@ -209,11 +217,12 @@ class Notebook:
         cells_graph = {_.name: _.inputs for _ in cells}
         cells_order = [_ for _ in TopologicalSorter(cells_graph).static_order()]
         for order, name in enumerate(cells_order):
+            # If the name is not in cells_map, it's part of the Web API
+            # or default symbols.
             if name in cells_map:
                 cells_map[name].order = order
 
         # We update the isResolved status
-        cells_map = dict((_.name, _) for _ in cells)
         is_skipped = lambda _: _ not in cells_map and _ in NATIVE_SKIPPED_SYMBOLS
         for cell in cells:
             # A resolved cells means that all its inputs are in the cells map
@@ -225,7 +234,7 @@ class Notebook:
                     if not is_skipped(_) and (cells_map.get(_) or _ in DEFINED_SYMBOLS)
                 ]
             ) == len(cell.inputs)
-        return sorted(cells, key=lambda _: _.order)
+        return [cells_map[_] for _ in cells_order if _ in cells_map]
 
 
 class NotebookParser:
