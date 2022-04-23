@@ -136,7 +136,7 @@ class Notebook:
 
     @property
     def isPrivate(self) -> bool:
-        return self.id and RE_NOTEBOOK_PRIVATE.match(self.id)
+        return bool(RE_NOTEBOOK_PRIVATE.match(self.id)) if self.id else False
 
     @property
     def cell(self) -> Optional[Cell]:
@@ -241,6 +241,13 @@ class Notebook:
         return [cells_map[_] for _ in cells_order if _ in cells_map]
 
 
+# --
+# Notes
+# - JavaScript-exported notebooks contain the imported notebooks, which
+#   sometimes contain cells with the same names. These should not shadow
+#   the current notebook's cells.
+
+
 class NotebookParser:
     """A crude line-based cell extractor for Observable. This relies on the
     notebook exports to be formatted the same way, so it might need updates
@@ -263,6 +270,7 @@ class NotebookParser:
     def __init__(self, id: Optional[str] = None):
         self.feedLineToCell = False
         self.source: Optional[str] = None
+        self.notebooks: dict[str, Notebook] = {}
         self.notebook = Notebook(id=id)
         self.cell: Optional[Cell] = None
         # Used to keep track of the from (source) of a cell
@@ -288,8 +296,9 @@ class NotebookParser:
             self.metaFrom = None
             self.metaRemote = None
             self.isCellFunction = False
-            if not self.notebook.id:
-                self.notebook.id = self.source
+            self.notebook = self.notebooks.setdefault(
+                self.source, Notebook(self.source)
+            )
         elif line.startswith(self.NAME):
             # We have the name of the cell, which is going to be a string after the `name:`
             # Note that Observable has "initial XXX" or "viewof XXX" as names
