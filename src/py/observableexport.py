@@ -1,6 +1,6 @@
 #!/usr/bin/env python
 import json, sys, requests, argparse, re, os
-from typing import Optional, Iterator
+from typing import Optional, Iterator, Union
 from fnmatch import fnmatch
 from graphlib import TopologicalSorter
 
@@ -267,11 +267,11 @@ class NotebookParser:
     END_VALUE = "    },"
     RE_INPUT_FUNCTION = re.compile(r"\(function\([^\)]*\)\{return\(")
 
-    def __init__(self, id: Optional[str] = None):
+    def __init__(self):
         self.feedLineToCell = False
         self.source: Optional[str] = None
         self.notebooks: dict[str, Notebook] = {}
-        self.notebook = Notebook(id=id)
+        self.notebook: Optional[Notebook] = None
         self.cell: Optional[Cell] = None
         # Used to keep track of the from (source) of a cell
         self.metaFrom: Optional[str] = None
@@ -296,9 +296,21 @@ class NotebookParser:
             self.metaFrom = None
             self.metaRemote = None
             self.isCellFunction = False
-            self.notebook = self.notebooks.setdefault(
+            # NOTE: The very last notebook of the page will be the aggregation
+            # of all the others:
+            #
+            # ```
+            # const notebook = {
+            #   id: "9177eee981fcbaee@2256",
+            #   modules: [m0,m1,m2,m3]
+            # }
+            # ```
+            self.notebook = pself.notebooks.setdefault(
                 self.source, Notebook(self.source)
             )
+            # if self.notebook is None:
+            #     print("XXX NOTEBOOOK", self.source, notebook.id)
+            #     self.notebook = notebook
         elif line.startswith(self.NAME):
             # We have the name of the cell, which is going to be a string after the `name:`
             # Note that Observable has "initial XXX" or "viewof XXX" as names
@@ -382,7 +394,9 @@ class NotebookParser:
                 self.cell.addLine(line)
 
 
-def download(notebook: str, key: Optional[str] = None):
+def download(
+    notebook: str, key: Optional[str] = None, raw: bool = False
+) -> Optional[Union[str, Notebook]]:
     """Downloads the given notebook, optionally using the given API key"""
     name = RE_NOTEBOOK_NAMED.match(notebook) or RE_NOTEBOOK_PRIVATE.match(notebook)
     if not name:
@@ -414,10 +428,13 @@ def download(notebook: str, key: Optional[str] = None):
         headers = {}
     r = requests.get(url, headers=headers)
     if r.status_code >= 200 and r.status_code < 300:
-        parser = NotebookParser()
-        for line in r.text.split("\n"):
-            parser.feed(line + "\n")
-        return parser.notebook
+        if raw:
+            return r.text
+        else:
+            parser = NotebookParser()
+            for line in r.text.split("\n"):
+                parser.feed(line + "\n")
+            return parser.notebook
     else:
         raise RuntimeError(f"Request to {url} failed with {r.status_code}: {r.text}")
 
@@ -541,7 +558,7 @@ def run(args=sys.argv[1:]):
     parser.add_argument(
         "-t",
         "--type",
-        help="Supports the output type: 'js' or 'json'",
+        help="Supports the output type: 'js', 'json' or 'raw'",
     )
     parser.add_argument(
         "--transitive-exports",
@@ -555,22 +572,25 @@ def run(args=sys.argv[1:]):
     # We get the format type from the args or the output format
     output_ext = args.output.rsplit(".")[-1].lower() if "." in args.output else None
     output_format = args.type or output_ext or "js"
+    output_format = ({"ojs": "raw"}).get(output_format, output_format)
 
     try:
-        notebook = download(args.notebook, key=args.api_key)
+        notebook = download(args.notebook, key=args.api_key, raw=output_format == "raw")
     except RuntimeError as e:
         sys.stderr.write(f"!!! ERR {e}\n")
         sys.stderr.flush()
         return 1
 
-    if args.ignore:
+    if args.ignore and isinstance(notebook, Notebook):
         notebook = Notebook(
             id=notebook.id,
             cells=[_ for _ in notebook.cells if matches(_.name, args.ignore)],
         )
 
     def write(out) -> int:
-        if output_format == "json":
+        if output_format == "raw":
+            out.write(notebook)
+        elif output_format == "json":
             json.dump(
                 {_.name: _.asDict() for _ in notebook.cells},
                 out,
