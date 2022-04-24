@@ -288,8 +288,8 @@ class NotebookParser:
             # It can be :
             # - @username/notebook
             # - @username/notebook@version
-            # - XXXXXXXXXXXXXXX
-            # - XXXXXXXXXXXXXXX@version
+            # - NNNNNNNNNNNNNNN
+            # - NNNNNNNNNNNNNNN@version
             self.source = match.group("id") or match.group()
             self.feedLineToCell = False
             self.cell = None
@@ -305,19 +305,17 @@ class NotebookParser:
             #   modules: [m0,m1,m2,m3]
             # }
             # ```
-            self.notebook = pself.notebooks.setdefault(
+            self.notebook = self.notebooks.setdefault(
                 self.source, Notebook(self.source)
             )
-            # if self.notebook is None:
-            #     print("XXX NOTEBOOOK", self.source, notebook.id)
-            #     self.notebook = notebook
         elif line.startswith(self.NAME):
             # We have the name of the cell, which is going to be a string after the `name:`
-            # Note that Observable has "initial XXX" or "viewof XXX" as names
+            # Note that Observable has "initial NNN" or "viewof NNN" as names
             # of special cells (views, and mutable cells). We normalise the names
             # by replacing spaces with underscore, which may triger some name
             # clashes.
             name = json.loads(line[len(self.NAME) : -2]).replace(" ", "_")
+            assert self.notebook, f"Notebook not defined before cell definition: {line}"
             self.cell = self.notebook.addCell(
                 name, source=self.metaFrom or self.source, sourceName=self.metaRemote
             )
@@ -338,6 +336,7 @@ class NotebookParser:
             inputs = [
                 _.replace(" ", "_") for _ in json.loads(line[len(self.INPUTS) : -2])
             ]
+            assert self.notebook, f"Notebook not defined before cell definition: {line}"
             if not self.cell:
                 if inputs == ["md"]:
                     self.cell = self.notebook.addCell(
@@ -591,15 +590,18 @@ def run(args=sys.argv[1:]):
         if output_format == "raw":
             out.write(notebook)
         elif output_format == "json":
+            assert notebook and isinstance(notebook, Notebook)
             json.dump(
                 {_.name: _.asDict() for _ in notebook.cells},
                 out,
             )
         elif output_format == "md":
+            assert notebook and isinstance(notebook, Notebook)
             for line in asMarkdown(notebook):
                 out.write(line)
             out.flush()
         elif output_format == "js":
+            assert notebook and isinstance(notebook, Notebook)
             for line in asModule(notebook, transitiveExports=args.transitive_exports):
                 out.write(line)
             if args.manifest:
