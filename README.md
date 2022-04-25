@@ -19,12 +19,7 @@ variety of formats including:
 
 ## Quickstart
 
-By downloading the script directly:
-
-    curl -o observableexport.py https://raw.githubusercontent.com/sebastien/observable-export/main/src/py/observableexport.py 
-    python ./observableexport.py @sebastien/boilerplate
-
-or by using PIP
+Using PIP
 
     python -m pip install --user observable-export
 
@@ -74,3 +69,6 @@ key (you can get it [here](https://observablehq.com/settings/api-keys)).
 -   Observable API Keys
     [ObsHQ](https://observablehq.com/@observablehq/api-keys), although
     this article seems a bit outdated.
+
+-   Documentation for ObservableHQ API, [Observable
+    Talk](https://talk.observablehq.com/t/documentation-for-api-observablehq-com/2661)
