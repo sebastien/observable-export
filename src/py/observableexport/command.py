@@ -1,6 +1,6 @@
 from .model import Notebook
 from .api import (
-    notebook_download,
+    notebook_get,
     notebook_parse,
     notebook_md,
     notebook_js,
@@ -67,7 +67,7 @@ def run(args=sys.argv[1:]):
     output_format = ({"ojs": "raw"}).get(output_format, output_format)
 
     try:
-        notebook_source = notebook_download(args.notebook, key=args.api_key)
+        notebook_source = notebook_get(args.notebook, key=args.api_key)
     except RuntimeError as e:
         sys.stderr.write(f"!!! ERR {e}\n")
         sys.stderr.flush()

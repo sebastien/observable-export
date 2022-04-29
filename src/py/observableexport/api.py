@@ -1,6 +1,6 @@
 from .model import Notebook, Cell
 from .parser import NotebookParser
-from typing import Optional, Iterator
+from typing import Optional, Iterator, Union
 import requests
 import os
 import json
@@ -19,8 +19,9 @@ def observable_url(path: str) -> str:
     return f"https://api.observablehq.com/{path}"
 
 
-def observable_request(url: str, apiKey: Optional[str]) -> str:
-    headers = {"Authorization": f"ApiKey {apiKey}"} if apiKey else {}
+def observable_request(url: str, apiKey: Optional[Union[bool, str]] = True) -> str:
+    api_key = observable_key if apiKey is True else apiKey or ""
+    headers = {"Authorization": f"ApiKey {api_key}"} if api_key else {}
     r = requests.get(observable_url(url), headers=headers)
     if r.status_code >= 200 and r.status_code < 300:
         return r.text
@@ -28,11 +29,55 @@ def observable_request(url: str, apiKey: Optional[str]) -> str:
         raise RuntimeError(f"Request to {url} failed with {r.status_code}: {r.text}")
 
 
+def observable_list(
+    path: str, apiKey: Optional[Union[bool, str]] = True, limit: int = 100
+) -> list[dict]:
+    res: dict[str, dict] = {}
+    before: Optional[str] = None
+    added: int = 1
+    # There's a limit of 30 results per page, so we use the "before" query
+    # parameter to iterate through the results.
+    while added != 0 and len(res) < limit:
+        added = 0
+        for item in json.loads(
+            observable_request(
+                (f"{path}?before={before}" if before else path),
+                apiKey or observable_key(),
+            )
+        ):
+            nid = item["id"]
+            update_time = item["update_time"]
+            before = update_time if before is None or update_time < before else before
+            if nid not in res:
+                res[nid] = item
+                added += 1
+    return [_ for _ in res.values()]
+
+
 def user_information(username: str):
     pass
 
 
-def notebook_download(
+def user_collections(username: str, key: Optional[str] = None):
+    return json.loads(observable_request(f"collections/@{username}", key))
+
+
+def user_notebooks(username: str, key: Optional[str] = None, limit: int = 100):
+    """Lists the public notebooks of the given user, up to `limit` documents."""
+    return observable_list(f"documents/@{username}", key, limit)
+
+
+def user_collection_notebooks(
+    username: str, collection: str, key: Optional[str] = None
+):
+    return json.loads(
+        observable_request(
+            f"collection/@{username}/{collection}", key or observable_key()
+        )
+    )
+
+
+def notebook_get(
     notebook: str,
     key: Optional[str] = None,
 ) -> str:
@@ -50,7 +95,7 @@ def notebook_download(
                 f"Missing Observable API key variable {OBSERVABLE_API_KEY}, visit https://observablehq.com/settings/api-keys to create one"
             )
         # https://api.observablehq.com/d/[NOTEBOOK_ID][@VERSION].[FORMAT]?v=3&api_key=xxxx
-        url = f"{name.id}{rev}.js"
+        url = f"d/{name.id}{rev}.js"
     else:
         url = f"@{name.username}/{name.name}{rev}.js?"
     return observable_request(url, api_key)

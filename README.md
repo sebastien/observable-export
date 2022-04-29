@@ -66,9 +66,15 @@ key (you can get it [here](https://observablehq.com/settings/api-keys)).
 
 ## References
 
--   Observable API Keys
-    [ObsHQ](https://observablehq.com/@observablehq/api-keys), although
+-   Advanced Embedding and Downloading, [Observable
+    notebook](https://observablehq.com/@observablehq/downloading-and-embedding-notebooks)
+
+-   Observable API Keys [Observable
+    notebook](https://observablehq.com/@observablehq/api-keys), although
     this article seems a bit outdated.
 
 -   Documentation for ObservableHQ API, [Observable
     Talk](https://talk.observablehq.com/t/documentation-for-api-observablehq-com/2661)
+
+-   Notebook Visualizer, by Taras Novak, [Observable
+    Notebook](https://observablehq.com/@randomfractals/notebooks?userName=randomfractals#codesAbout)
