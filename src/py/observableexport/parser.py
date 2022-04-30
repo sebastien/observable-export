@@ -1,6 +1,7 @@
-from .model import Notebook
+from .model import Notebook, Cell
 import re
 import json
+from typing import Optional
 
 # --
 # Notes
@@ -127,7 +128,6 @@ class NotebookParser:
                     )
                 self.cell.inputs = inputs
         elif line.startswith(self.VALUE):
-            self.feedLineToCell = self.cell and self.cell.isEmpty and True
             rest = line[len(self.VALUE) :]
             # Observable function declarations will start with
             # that prefix. This is a bit awkward, but besically we use
@@ -135,9 +135,21 @@ class NotebookParser:
             # that is a function from a cell that is just a value.
             if self.RE_INPUT_FUNCTION.match(rest):
                 self.isCellFunction = True
+                # If there's no cell defined, it means it's an anonymous cell
+                if not self.cell:
+                    assert self.notebook
+                    self.cell = self.notebook.addCell(
+                        None,
+                        source=self.metaFrom or self.source,
+                        sourceName=self.metaRemote,
+                    )
+
             elif self.cell:
                 self.cell.addLine(rest)
                 self.isCellFunction = False
+            # NOTE: It's important to leave that at the end of the branch,
+            # as we may be creating cells.
+            self.feedLineToCell = self.cell and self.cell.isEmpty and True
         elif (self.isCellFunction and line.startswith(self.END_FUNCTION)) or (
             (not self.isCellFunction) and line.startswith(self.END_VALUE)
         ):
@@ -152,3 +164,9 @@ class NotebookParser:
         elif self.feedLineToCell:
             if self.cell:
                 self.cell.addLine(line)
+        else:
+            # print("DEBUG")
+            pass
+
+
+# EOF

@@ -57,6 +57,7 @@ class Cell:
     tree and the key can be used to sort the cells by dependency."""
 
     RE_PREPROCESSED = re.compile(r"^\w+`")
+    RE_ANONYMOUS = re.compile(r"^__CELL_\d+__$")
 
     def __init__(
         self,
@@ -76,6 +77,7 @@ class Cell:
         self.order: int = 0
         self.key: int = 0
         self.isResolved: bool = False
+        self.isAnonymous = bool(self.RE_ANONYMOUS.match(name))
 
     def asDict(self, source=True, value=True) -> dict:
         return {
@@ -114,7 +116,10 @@ class Cell:
         """Returns the cell's text as a single string"""
         if self.type in ("md", "html"):
             return (
-                "".join(self.value).rstrip("`\n").lstrip(f"{type}`").replace("\\`", "`")
+                "".join(self.value)
+                .rstrip("`\n")
+                .lstrip(f"{self.type}`")
+                .replace("\\`", "`")
             )
         else:
             return (

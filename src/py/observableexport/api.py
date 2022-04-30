@@ -121,8 +121,10 @@ def notebook_dependencies(*notebook: str) -> list[str]:
     loaded: dict[str, list[str]] = {}
     to_process: list[str] = [_ for _ in notebook]
     while to_process:
-        n = notebook_parse(notebook_get(nid := to_process.pop()))
-        assert nid not in loaded
+        nid = to_process.pop()
+        if nid in loaded:
+            continue
+        n = notebook_parse(notebook_get(nid))
         loaded[nid] = [_ for _ in n.imported]
         to_process += [_ for _ in loaded[nid] if _ not in loaded]
     return [_ for _ in loaded]
@@ -149,7 +151,12 @@ def notebook_md(notebook: Notebook) -> Iterator[str]:
             yield "```\n\n"
 
 
-def notebook_js(notebook: Notebook, transitiveExports=False) -> Iterator[str]:
+def notebook_js(
+    notebook: Notebook,
+    transitiveExports=False,
+    withPreprocessed=True,
+    withAnonymous=True,
+) -> Iterator[str]:
     """Converts the Observable notebook as a JavaScript module."""
 
     # --
@@ -204,10 +211,17 @@ def notebook_js(notebook: Notebook, transitiveExports=False) -> Iterator[str]:
             continue
         elif cell.name.startswith("mutable_"):
             continue
-        elif not cell.isPreprocessed:
-            yield cell.text
+        elif (not cell.isPreprocessed or withPreprocessed) and (
+            not cell.isAnonymous or withAnonymous
+        ):
 
-    yield "// EOF"
+            yield f"\n// @cell('{cell.name}', {cell.inputs})\nexport const {cell.name} = (\n"
+            yield json.dumps(
+                {"type": cell.type, "value": cell.text}
+            ) if cell.isPreprocessed else "".join(cell.value)
+            yield ");\n"
+
+    yield "// EOF\n"
 
 
 # EOF

@@ -39,16 +39,19 @@ def run(args=sys.argv[1:]):
         help="Excludes the given cell names",
     )
     parser.add_argument("-o", "--output", help="Outputs to the given file", default="")
-    parser.add_argument(
-        "-a",
-        "--append",
-        action="store_true",
-        help="Appends to the output file",
-        default=False,
-    )
+
     parser.add_argument("-k", "--api-key", help="Sets the API key to use")
     parser.add_argument(
+        "-a",
+        "--all",
+        action="store_true",
+        help="Adds an __all__ definition with all cell values",
+    )
+    parser.add_argument(
         "-m", "--manifest", action="store_true", help="Adds a manifest at the end"
+    )
+    parser.add_argument(
+        "-n", "--named", action="store_true", help="Only includes named cells"
     )
     parser.add_argument(
         "-d",
@@ -75,9 +78,10 @@ def run(args=sys.argv[1:]):
     output_format = args.type or output_ext or "js"
     output_format = ({"ojs": "raw"}).get(output_format, output_format)
 
-    notebooks: list[Union[str, Notebook]] = []
+    notebooks: list[Notebook] = []
     # NOTE: This is a bit awkward, but we do not need to parse the notebooks
     # just yet if we're using the dependencies.
+    notebook_sources: list[str] = []
     if not args.dependencies:
         for name in args.notebook:
             try:
@@ -87,6 +91,7 @@ def run(args=sys.argv[1:]):
                 sys.stderr.flush()
                 return 1
 
+            notebook_sources.append(notebook_source)
             notebook = (
                 notebook_parse(notebook_source) if output_format != "raw" else None
             )
@@ -95,7 +100,8 @@ def run(args=sys.argv[1:]):
                     id=notebook.id,
                     cells=[_ for _ in notebook.cells if matches(_.name, args.ignore)],
                 )
-            notebooks.append(notebook)
+            if notebook:
+                notebooks.append(notebook)
 
     def write(out) -> int:
         if args.dependencies:
@@ -111,8 +117,8 @@ def run(args=sys.argv[1:]):
             else:
                 out.write(json.dumps(deps))
         elif output_format == "raw":
-            for notebook in notebooks:
-                out.write(notebook)
+            for _ in notebook_sources:
+                out.write(_)
         elif output_format == "json":
             if len(notebooks) == 1:
                 out.write(notebook_json(notebooks[0]))
@@ -129,7 +135,10 @@ def run(args=sys.argv[1:]):
             for notebook in notebooks:
                 assert notebook and isinstance(notebook, Notebook)
                 for line in notebook_js(
-                    notebook, transitiveExports=args.transitive_exports
+                    notebook,
+                    transitiveExports=args.transitive_exports,
+                    withAnonymous=False if args.named else True,
+                    withPreprocessed=False if args.named else True,
                 ):
                     out.write(line)
                     # FIXME: This may not make a lot of sense when multiple notebooks
@@ -137,12 +146,18 @@ def run(args=sys.argv[1:]):
                         {
                             _.name: _.asDict(source=False, value=False)
                             for _ in notebook.cells
+                            if not args.named or not (_.isAnonymous or _.isPreprocessed)
                         }
                     )
             if args.manifest:
-                out.write(f"export const __manifest__ = (")
+                out.write(f"\nexport const __manifest__ = (")
                 json.dump(manifest, out)
                 out.write(");\n")
+            if args.all:
+                out.write("\nexport const __all__ = {")
+                out.write(", ".join(_ for _ in manifest))
+                out.write("};\n")
+
         else:
             raise ValueError(
                 "Supported types are json, js or md, got: {output_format} "
@@ -151,7 +166,7 @@ def run(args=sys.argv[1:]):
         return 0
 
     if args.output:
-        with open(args.output, "a" if args.append else "w") as f:
+        with open(args.output, "w") as f:
             return write(f)
     else:
         return write(sys.stdout)
