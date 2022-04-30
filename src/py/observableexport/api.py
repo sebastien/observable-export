@@ -5,10 +5,13 @@ import requests
 import os
 import json
 
+# TODO: Support caching
+# TODO: Support request ETag
 # TODO: Support listing notebooks (including private)
 # TODO: Support listing notebook revisions(including private)
 
 OBSERVABLE_API_KEY = "OBSERVABLE_API_KEY"
+CACHE: dict[str, str] = {}
 
 
 def observable_key(variable=OBSERVABLE_API_KEY) -> str:
@@ -20,10 +23,13 @@ def observable_url(path: str) -> str:
 
 
 def observable_request(url: str, apiKey: Optional[Union[bool, str]] = True) -> str:
+    if url in CACHE:
+        return CACHE[url]
     api_key = observable_key if apiKey is True else apiKey or ""
     headers = {"Authorization": f"ApiKey {api_key}"} if api_key else {}
     r = requests.get(observable_url(url), headers=headers)
     if r.status_code >= 200 and r.status_code < 300:
+        CACHE[url] = r.text
         return r.text
     else:
         raise RuntimeError(f"Request to {url} failed with {r.status_code}: {r.text}")
@@ -107,6 +113,19 @@ def notebook_parse(content: str) -> Notebook:
     for line in content.split("\n"):
         parser.feed(f"{line}\n")
     return parser.notebook
+
+
+def notebook_dependencies(*notebook: str) -> list[str]:
+    """Returns the list of all the dependencies, including transitive
+    dependencies from this notebook."""
+    loaded: dict[str, list[str]] = {}
+    to_process: list[str] = [_ for _ in notebook]
+    while to_process:
+        n = notebook_parse(notebook_get(nid := to_process.pop()))
+        assert nid not in loaded
+        loaded[nid] = [_ for _ in n.imported]
+        to_process += [_ for _ in loaded[nid] if _ not in loaded]
+    return [_ for _ in loaded]
 
 
 def notebook_json(notebook: Notebook) -> str:
