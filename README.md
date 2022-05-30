@@ -4,8 +4,8 @@
     |___|___|___|___|_|  \_/|__,|___|_|___|  |___|_,_|  _|___|_| |_|  
                                                      |_|
 
-A self-contained Python script that exports ObservableHQ notebooks to a
-variety of formats including:
+A Python API and CLI tool to exports ObservableHQ notebooks to a variety
+of formats including:
 
 -   A standalone JavaScript file that does not require the Observable
     runtime, assuming your notebook doesn't contain too much

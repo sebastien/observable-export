@@ -65,6 +65,7 @@ def run(args=sys.argv[1:]):
         help="Supports the output type: 'js', 'json' or 'raw'",
     )
     parser.add_argument(
+        "-e",
         "--transitive-exports",
         action="store_true",
         help="Notebooks re-export their imported symbols (js only)",

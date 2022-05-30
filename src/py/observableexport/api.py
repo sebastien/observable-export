@@ -22,10 +22,10 @@ def observable_url(path: str) -> str:
     return f"https://api.observablehq.com/{path}"
 
 
-def observable_request(url: str, apiKey: Optional[Union[bool, str]] = True) -> str:
+def observable_request(url: str, key: Optional[Union[bool, str]] = True) -> str:
     if url in CACHE:
         return CACHE[url]
-    api_key = observable_key if apiKey is True else apiKey or ""
+    api_key = observable_key if key is True else key or ""
     headers = {"Authorization": f"ApiKey {api_key}"} if api_key else {}
     r = requests.get(observable_url(url), headers=headers)
     if r.status_code >= 200 and r.status_code < 300:
@@ -36,7 +36,7 @@ def observable_request(url: str, apiKey: Optional[Union[bool, str]] = True) -> s
 
 
 def observable_list(
-    path: str, apiKey: Optional[Union[bool, str]] = True, limit: int = 100
+    path: str, key: Optional[Union[bool, str]] = True, limit: int = 100
 ) -> list[dict]:
     res: dict[str, dict] = {}
     before: Optional[str] = None
@@ -48,7 +48,7 @@ def observable_list(
         for item in json.loads(
             observable_request(
                 (f"{path}?before={before}" if before else path),
-                apiKey or observable_key(),
+                key or observable_key(),
             )
         ):
             nid = item["id"]
@@ -115,7 +115,11 @@ def notebook_parse(content: str) -> Notebook:
     return parser.notebook
 
 
-def notebook_dependencies(*notebook: str) -> list[str]:
+def notebook_load(notebook: str, key: Optional[str] = None) -> Notebook:
+    return notebook_parse(notebook_get(notebook, key=key))
+
+
+def notebook_dependencies(*notebook: str, key: Optional[str] = None) -> list[str]:
     """Returns the list of all the dependencies, including transitive
     dependencies from this notebook."""
     loaded: dict[str, list[str]] = {}
@@ -124,7 +128,7 @@ def notebook_dependencies(*notebook: str) -> list[str]:
         nid = to_process.pop()
         if nid in loaded:
             continue
-        n = notebook_parse(notebook_get(nid))
+        n = notebook_parse(notebook_get(nid, key=key))
         loaded[nid] = [_ for _ in n.imported]
         to_process += [_ for _ in loaded[nid] if _ not in loaded]
     return [_ for _ in loaded]
@@ -156,6 +160,7 @@ def notebook_js(
     transitiveExports=False,
     withPreprocessed=True,
     withAnonymous=True,
+    importParameters: Optional[str] = None,
 ) -> Iterator[str]:
     """Converts the Observable notebook as a JavaScript module."""
 
@@ -190,7 +195,7 @@ def notebook_js(
             )
             yield "import {" + ", ".join(import_names) + "} from '" + prefix + (
                 source
-            ) + ".js'\n"
+            ) + f".js{importParameters or ''}'\n"
 
     if transitiveExports:
         # --
