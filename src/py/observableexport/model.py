@@ -2,6 +2,7 @@
 import re
 from typing import Optional, NamedTuple, Union
 from graphlib import TopologicalSorter
+from dataclasses import dataclass
 
 __doc__ = """
 Parses ObservableHQ notebook API `https://api.observablehq.com/{notebook}.js`,
@@ -41,6 +42,31 @@ RE_NOTEBOOK_PRIVATE = re.compile(f"^{NOTEBOOK_HASH}{NOTEBOOK_REV}$")
 RE_NOTEBOOK = re.compile(
     f"^(?P<notebookname>{NOTEBOOK_HASH}|{NOTEBOOK_NAME}){NOTEBOOK_REV}$"
 )
+
+
+@dataclass
+class NotebookRef:
+    """An unambiguous reference to a notebook"""
+
+    id: str
+    version: int
+    username: Optional[str] = None
+    name: Optional[str] = None
+
+    @property
+    def key(self) -> str:
+        return f"{self.id}@{self.version}"
+
+
+@dataclass
+class NotebookHeader:
+    """The parse result of a JavaScript header
+    for an observable notebook"""
+
+    id: Optional[str]
+    version: int
+    username: str
+    name: Optional[str]
 
 
 class NotebookName(NamedTuple):

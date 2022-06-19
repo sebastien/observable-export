@@ -1,10 +1,9 @@
-from .model import Notebook, Cell
+from .model import Notebook, Cell, NotebookRef, NotebookHeader
 from .parser import NotebookParser
 from typing import Optional, Iterator, Union, Generic, TypeVar, cast
 import requests
 import os
 import json
-from dataclasses import dataclass
 
 # TODO: Support caching
 # TODO: Support request ETag
@@ -13,27 +12,6 @@ from dataclasses import dataclass
 
 T = TypeVar("T")
 OBSERVABLE_API_KEY = "OBSERVABLE_API_KEY"
-
-
-@dataclass
-class NotebookRef:
-    """An unambiguous reference to a notebook"""
-
-    id: str
-    version: int
-    username: Optional[str] = None
-    name: Optional[str] = None
-
-
-@dataclass
-class NotebookHeader:
-    """The parse result of a JavaScript header
-    for an observable notebook"""
-
-    id: Optional[str]
-    version: int
-    username: str
-    name: Optional[str]
 
 
 class Singleton(Generic[T]):
@@ -203,10 +181,10 @@ class NotebookAPI(Singleton["NotebookAPI"]):
     # the notebook AND its revision number.
     def dependencies(
         self, *notebook: Union[NotebookRef, str], key: Optional[str] = None
-    ) -> list[str]:
+    ) -> list[NotebookRef]:
         """Returns the list of all the dependencies, including transitive
         dependencies from this notebook."""
-        loaded: dict[str, list[str]] = {}
+        loaded: dict[str, list[NotebookRef]] = {}
         to_process: list[NotebookRef] = [self.resolve(_, key) for _ in notebook]
         while to_process:
             nref = to_process.pop()
@@ -214,11 +192,9 @@ class NotebookAPI(Singleton["NotebookAPI"]):
                 continue
             n = self.load(nref, key=key)
             if n:
-                loaded[nref.id] = [_ for _ in n.imported]
-                to_process += [
-                    self.resolve(_) for _ in loaded[nref.id] if _ not in loaded
-                ]
-        return [_ for _ in loaded]
+                loaded[nref.key] = [self.resolve(_, key) for _ in n.imported]
+                to_process += [_ for _ in loaded[nref.key] if _.id not in loaded]
+        return [self.resolve(_, key) for _ in loaded]
 
     def get(
         self,
