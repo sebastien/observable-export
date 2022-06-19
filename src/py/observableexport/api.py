@@ -324,8 +324,13 @@ def notebook_js(
     withPreprocessed=True,
     withAnonymous=True,
     importParameters: Optional[str] = None,
+    versions: Optional[list[NotebookRef]] = None,
 ) -> Iterator[str]:
     """Converts the Observable notebook as a JavaScript module."""
+
+    imported_version: dict[str, int] = {
+        _.id: _.version for _ in versions or () if _.version
+    }
 
     # --
     # We start with the imported cells, which are found in the
@@ -356,8 +361,11 @@ def notebook_js(
                 else (f"{cell.sourceName} as {name}" if cell.sourceName else name)
                 for name, cell in import_cells.items()
             )
+            resolved_source: NotebookRef = notebook_resolve(source)
             yield "import {" + ", ".join(import_names) + "} from '" + prefix + (
-                source
+                # Here we override the resolved version with the one from the imported
+                # versions, if specificied.
+                f"{resolved_source.id}@{imported_version.get(resolved_source.id, resolved_source.version)}"
             ) + f".js{importParameters or ''}'\n"
 
     if transitiveExports:
