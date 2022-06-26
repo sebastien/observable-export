@@ -99,6 +99,8 @@ class NotebookParser:
                 _.replace(" ", "_") for _ in json.loads(line[len(self.INPUTS) : -2])
             ]
             assert self.notebook, f"Notebook not defined before cell definition: {line}"
+            # FIXME: This is a messy, reptititive section that that
+            # should be reworked.
             if not self.cell:
                 if inputs == ["md"]:
                     self.cell = self.notebook.addCell(
@@ -107,6 +109,7 @@ class NotebookParser:
                         sourceName=self.metaRemote,
                         type="md",
                     )
+                    self.cell.inputs = [_ for _ in inputs if _ != "md"]
                 elif inputs == ["html"]:
                     self.cell = self.notebook.addCell(
                         None,
@@ -114,8 +117,15 @@ class NotebookParser:
                         sourceName=self.metaRemote,
                         type="html",
                     )
+                    self.cell.inputs = [_ for _ in inputs if _ != "html"]
                 else:
-                    pass
+                    self.cell = self.notebook.addCell(
+                        None,
+                        source=self.metaFrom or self.source,
+                        sourceName=self.metaRemote,
+                        type=None,
+                    )
+                    self.cell.inputs = inputs
             elif self.cell:
                 # If we already have inputs, this means that we have a new cell,
                 # which is likely going to be anonymous
@@ -124,6 +134,7 @@ class NotebookParser:
                         None,
                         source=self.metaFrom or self.source,
                         sourceName=self.metaRemote,
+                        # FIXME: Why is this HTML?
                         type="html",
                     )
                 self.cell.inputs = inputs
