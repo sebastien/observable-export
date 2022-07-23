@@ -87,13 +87,13 @@ class Cell:
 
     def __init__(
         self,
-        name: str,
+        name: Optional[str],
         source: str,
         index: int,
         type: Optional[str] = None,
         sourceName: Optional[str] = None,
     ):
-        self.name: str = name
+        self.name: str = name or f"__CELL_{index}__"
         self.sourceName: Optional[str] = sourceName
         self.type: str = type if type else "js"
         self.source: str = source
@@ -103,7 +103,7 @@ class Cell:
         self.order: int = 0
         self.key: int = 0
         self.isResolved: bool = False
-        self.isAnonymous = bool(self.RE_ANONYMOUS.match(name))
+        self.isAnonymous = bool(self.RE_ANONYMOUS.match(self.name))
 
     def asDict(self, source=True, value=True) -> dict:
         return {
@@ -183,7 +183,7 @@ class Notebook:
 
     @staticmethod
     def ParseName(name: str) -> Optional[NotebookName]:
-        """Parses the  noteboook nname"""
+        """Parses the notebook name"""
         matched = RE_NOTEBOOK_PUBLIC.match(name) or RE_NOTEBOOK_PRIVATE.match(name)
         if not matched:
             return None

@@ -22,7 +22,7 @@ class ParsedCell:
 
 @dataclass
 class ParsedModule:
-    id: int
+    id: Optional[str] = None
     cells: list[ParsedCell] = field(default_factory=list)
 
 
@@ -33,7 +33,12 @@ class ParsedNotebook:
     modules: list[ParsedModule] = field(default_factory=list)
 
 
+# SEE: https://api.observablehq.com/@sebastien/boilerplate.js
 class NotebookParser:
+    """A line-based cell extractor for Observable. This relies on the
+    notebook exports to be formatted the same way, so it might need updates
+    along the way. This is a rewrite of the original version that brings
+    a bit more safety and resilience."""
 
     # Blocks
     RE_START_DECLARATION = re.compile("^const (\w+\d*) = \{$")
@@ -62,67 +67,67 @@ class NotebookParser:
         # --
         # Maintains the current _declaration_, which is expected to
         # be either a module `(module,<modulenum>)` or a notebook `(notebook, None)`.
-        self.inDeclaration: Optional[tuple[str, Optional[int]]] = None
-        self.inVariables: bool = False
         self.blockStartLine: Optional[int] = None
         self.blockEndLine: int = 0
         # --
-        self.modules: list[ParsedModule] = []
+        self.modules: dict[str, ParsedModule] = {}
         self.module: Optional[ParsedModule] = None
         self.notebook: Optional[ParsedNotebook] = None
         self.cell: Optional[ParsedCell] = None
+        self.blockLines: list[tuple[int, str]] = []
 
-    def flush(text: str) -> tuple[Optional[Notebook], dict[str, Notebook]]:
-        return None, None
+    def flush(self) -> ParsedNotebook:
+        res = self.notebook
+        self.lineNumber = 0
+        self.blockStartLine = None
+        self.blockEndLine = 0
+        self.modules = {}
+        self.module = None
+        self.cell = None
+        self.blockLines = []
+        assert res
+        return res
 
     def feed(self, line: str):
         # NOTE: We dont't expect the line to end with `\n`, but
         # it doesn't matter if it does.
         line = line.rstrip("\n")
+        if self.blockStartLine is not None:
+            self.blockLines.append((self.lineNumber, line))
         # ## Blocks
         if match := self.RE_START_DECLARATION.match(line):
-            print(f"{self.lineNumber:04d} START_DECLARTION")
             self.onStartDeclaration(match.group(1))
         elif match := self.RE_END_DECLARATION.match(line):
-            print(f"{self.lineNumber:04d} END_DECLARTION")
             self.onEndDeclaration()
         elif match := self.RE_START_VARIABLES.match(line):
-            print(f"{self.lineNumber:04d} START_VARIABLES")
             self.onStartModuleVariables()
         elif match := self.RE_END_VARIABLES.match(line):
-            print(f"{self.lineNumber:04d} END_VARIABLES")
             self.onEndModuleVariables()
         elif match := self.RE_START_BLOCK.match(line):
-            print(f"{self.lineNumber:04d} START_BLOCK")
             self.onStartBlock()
         elif match := self.RE_END_BLOCK.match(line):
-            print(f"{self.lineNumber:04d} END_BLOCK")
             self.onEndBlock()
         elif match := self.RE_EXPORT.match(line):
-            print(f"{self.lineNumber:04d} EXPORT")
             self.onEnd()
         # ## Inlines
         elif match := self.RE_META.match(line):
             self.onMeta(match.group(1), match.group(2))
         elif match := self.RE_ENTRY_ID.match(line):
-            id = match.group(1)
-            print(f"{self.lineNumber:04d} XXX{id=}")
-            self.onEntryId(id)
+            self.onEntryId(match.group(1))
         elif match := self.RE_ENTRY_NAME.match(line):
             self.onEntryName(match.group(1))
         elif match := self.RE_ENTRY_VALUE.match(line):
             self.onEntryValue(match.group(1))
         elif match := self.RE_ENTRY_REMOTE.match(line):
-            remote = match.group(1)
-            print(f"{self.lineNumber:04d} XXX{remote=}")
+            self.onEntryRemote(match.group(1))
         elif match := self.RE_ENTRY_FROM.match(line):
-            remote_from = match.group(1)
-            print(f"{self.lineNumber:04d} XXX{remote_from=}")
+            self.onEntryFrom(match.group(1))
         elif match := self.RE_ENTRY_MODULES.match(line):
             self.onEntryModules([_.strip() for _ in match.group(1).split(",")])
         elif match := self.RE_ENTRY_INPUTS.match(line):
-            inputs = [_.strip().strip('"') for _ in match.group(1).split(",")]
-            print(f"{self.lineNumber:04d} XXX{inputs=} {line=}")
+            self.onEntryInputs(
+                [_.strip().strip('"') for _ in match.group(1).split(",")]
+            )
         else:
             self.onLine(line)
         self.lineNumber += 1
@@ -132,30 +137,24 @@ class NotebookParser:
 
     def onStartDeclaration(self, name: str):
         if match := self.RE_MODULE.match(name):
-            self.inDeclaration = ("module", mid := int(name[1:]))
-            self.module = ParsedModule(mid)
-            self.modules.append(self.module)
+            self.module = ParsedModule()
+            self.modules[name] = self.module
         elif name == "notebook":
-            self.inDeclaration = ("notebook", None)
+            if not self.notebook:
+                self.notebook = ParsedNotebook()
         else:
             raise RuntimeError(f"Unknown declaration: {name}")
 
     def onEndDeclaration(self):
-        self.inDeclaration = None
-        self.cell = None
+        self.doEndCell()
         self.module = None
 
     def onStartModuleVariables(self):
-        assert (
-            not self.inVariables
-        ), f"Start module variables without previous end: {self.lineNumber}"
-        self.inVariables = True
+        # We end any outstanding cell
+        self.doEndCell()
 
     def onEndModuleVariables(self):
-        assert (
-            self.inVariables
-        ), f"End variables without previous start at line: {self.lineNumber}"
-        self.inVariables = False
+        self.doEndCell()
 
     # --
     # We need to be super careful around the block start and end, as they
@@ -176,11 +175,14 @@ class NotebookParser:
     def onMeta(self, key: str, value: str):
         if not self.notebook:
             self.notebook = ParsedNotebook()
-        self.notebook.meta[key] = value.strip()
+        self.notebook.meta[key.lower()] = value.strip()
 
     def onEntryId(self, id: str):
         if self.module:
-            print("XXX MODULE ID=", id)
+            assert (
+                not self.module.id
+            ), f"Module should not have duplicate id: '{id}' in {self.module} at {self.lineNumber}"
+            self.module.id = id
         elif self.notebook:
             self.notebook.meta["id"] = id
         else:
@@ -212,8 +214,49 @@ class NotebookParser:
             # ```
             pass
 
+    def doEndCell(self):
+        # This gets the values from the cells
+        if self.cell and self.blockStartLine is not None:
+            for i, line in self.blockLines:
+                if i >= self.blockStartLine and i <= self.blockEndLine:
+                    self.cell.value.append(line)
+        self.blockLines = []
+        self.blockStartLine = None
+        self.cell = None
+
+    def doStartCell(self):
+        if self.cell:
+            self.doEndCell()
+        self.cell = ParsedCell()
+        assert self.module, "Cells should be defined within a module: {self.lineNumber}"
+        self.module.cells.append(self.cell)
+        self.blockStartLine = None
+
+    def onEntryInputs(self, inputs: list[str]):
+        if not self.cell or self.cell.inputs is not None:
+            self.doStartCell()
+        assert self.cell
+        assert (
+            not self.cell.inputs
+        ), f"Inputs entry should not override an existing inputs: '{inputs}' overrides {self.cell} at line {self.lineNumber}"
+        self.cell.inputs = inputs
+
+    def onEntryRemote(self, name: str):
+        if not self.cell or self.cell.remote is not None:
+            self.doStartCell()
+        assert self.cell
+        self.cell.remote = name
+
+    def onEntryFrom(self, name: str):
+        if not self.cell or self.cell.remoteFrom is not None:
+            self.doStartCell()
+        assert self.cell
+        self.cell.remoteFrom = name
+
     def onEntryValue(self, value: str):
-        assert self.cell, "Value entry should only occur in cells"
+        if self.cell and self.cell.value is not None:
+            self.doStartCell()
+        assert self.cell
         assert (
             not self.cell.value
         ), f"Value entry should not override an existing value: '{value}' overrides {self.cell} at line {self.lineNumber}"
@@ -223,7 +266,9 @@ class NotebookParser:
 
     def onEntryModules(self, modules: list[str]):
         assert self.notebook
-        print("XXX MODULES", modules)
+        for m in modules:
+            assert m in self.modules
+            self.notebook.modules.append(self.modules[m])
 
     def onLine(self, line):
         if self.cell:
@@ -236,7 +281,23 @@ class NotebookParser:
             raise RuntimeError(f"Could not parse line: {line}")
 
 
-def parse(text: str) -> tuple[Optional[Notebook], dict[str, Notebook]]:
+def process(notebook: ParsedNotebook) -> Notebook:
+    res = Notebook()
+    i: int = 0
+    for module in notebook.modules:
+        for parsed_cell in module.cells:
+            res.addCell(
+                name=parsed_cell.name,
+                source=parsed_cell.remoteFrom,
+                sourceName=parsed_cell.remote,
+                # TODO: Not sure about the type
+            )
+            i += 1
+            pass
+    return res
+
+
+def parse(text: str) -> ParsedNotebook:
     parser = NotebookParser()
     for line in text.split("\n"):
         parser.feed(line)
