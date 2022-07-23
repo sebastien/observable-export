@@ -42,7 +42,9 @@ class NotebookParser:
         # Tells if the cell is defined as a function
         self.isCellFunction = False
 
-    def feed(self, line):
+    # FIXME: This should really be an event-driven parser `onXXX`. This is
+    # super brittle.
+    def feed(self, line: str):
         # DEBUG: Leaving this here as it's useful when we get parsing errors
         # print(f"PARSED| {repr(line)}")
         if not self.feedLineToCell and (match := self.NOTEBOOK.match(line)):
@@ -178,6 +180,13 @@ class NotebookParser:
         else:
             # print("DEBUG")
             pass
+
+
+def parse(text: str) -> tuple[Optional[Notebook], dict[str, Notebook]]:
+    parser = NotebookParser()
+    for line in text.split("\n"):
+        parser.feed(line + "\n")
+    return parser.notebook, parser.notebooks
 
 
 # EOF
