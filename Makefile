@@ -7,6 +7,9 @@ PRODUCT     = MANIFEST
 
 all: $(PRODUCT)
 
+shell:
+	@env PATH=$(realpath bin):$(PATH) PYTHONPATH=$(realpath src/py) bash
+
 release: $(PRODUCT)
 	git commit -a -m "Release $(VERSION)" ; true
 	git tag $(VERSION) ; true
