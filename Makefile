@@ -46,6 +46,9 @@ print-%:
 	@echo "$*="
 	@for FILE in $($*); do echo $$FILE; done
 
+shell:
+	@env PATH=$(realpath bin):$(PATH) PYTHONPATH=$(realpath src/py) bash
+
 release: $(PRODUCT)
 	git commit -a -m "Release $(VERSION)" ; true
 	git tag $(VERSION) ; true
